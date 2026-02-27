@@ -19,7 +19,10 @@ document.addEventListener('wheel', function(e) {
     step = 0.010;
   }
   // Pourcentages (volume, amplitude, opacités, hauteurs)
-  else if (
+  // Tous ces sliders affichent valeur × 100 = %, donc 5 points de % = 0.05 raw,
+  // qu'ils aillent jusqu'à 100% (max=1) ou 400% (max=4).
+  let snapStep = null;
+  if (
     slider.id === 'volume-slider' ||
     slider.id === 'metro-vol-slider' ||
     slider.id === 'vol-panel-slider' ||
@@ -27,12 +30,27 @@ document.addEventListener('wheel', function(e) {
     slider.id.endsWith('height-slider') ||
     slider.id === 'amplitude-slider'
   ) {
-    // Pourcentages
-    step = (max - min) / 20; // 5% du range
+    step = 0.05; // toujours 5 points de % (0.05 × 100 = 5%)
+    snapStep = 0.05;
   }
 
-  // Appliquer
-  let newVal = val + step * delta;
+  // Appliquer — avec snap au multiple de step pour les sliders en %
+  let newVal;
+  if (snapStep !== null) {
+    // Si la valeur courante n'est pas déjà un multiple de snapStep,
+    // on saute au prochain multiple dans la direction voulue
+    // (ε = 1e-9 pour absorber les erreurs flottantes)
+    const eps = 1e-9;
+    if (delta > 0) {
+      newVal = (Math.floor(val / snapStep + eps) + 1) * snapStep;
+    } else {
+      newVal = (Math.ceil(val / snapStep - eps) - 1) * snapStep;
+    }
+    // Arrondi à 10 décimales pour éviter les résidus flottants (ex: 0.30000000004)
+    newVal = Math.round(newVal / snapStep) * snapStep;
+  } else {
+    newVal = val + step * delta;
+  }
   newVal = Math.max(min, Math.min(max, newVal));
   slider.value = newVal;
   slider.dispatchEvent(new Event('input', { bubbles: true }));
@@ -68,6 +86,7 @@ document.addEventListener('wheel', function(e) {
   const btnPlay        = $('btn-play');
   const btnStop        = $('btn-stop');
   const btnLoop        = $('btn-loop');
+  const btnExport      = $('btn-export');
   const iconPlay       = $('icon-play');
   const iconPause      = $('icon-pause');
   const timeCurrent    = $('time-current');
@@ -222,6 +241,7 @@ document.addEventListener('wheel', function(e) {
   /* ══ État ═══════════════════════════════════════════════════════ */
 
   let audioLoaded  = false;
+  let _loadedFileName = '';
   let rafUpdate    = null;
 
   /* ══ Tap tempo ══════════════════════════════════════════════════ */
@@ -304,9 +324,10 @@ document.addEventListener('wheel', function(e) {
   }
 
   function setTransportEnabled(on) {
-    btnPlay.disabled = !on;
-    btnStop.disabled = !on;
-    btnLoop.disabled = !on;
+    btnPlay.disabled   = !on;
+    btnStop.disabled   = !on;
+    btnLoop.disabled   = !on;
+    btnExport.disabled = !on;
   }
 
   function updatePlayIcons() {
@@ -362,6 +383,7 @@ document.addEventListener('wheel', function(e) {
 
     hideLoading();
     audioLoaded = true;
+    _loadedFileName = file.name;
 
     fileName.textContent    = file.name;
     timeTotal.textContent   = formatTime(audio.duration);
@@ -1729,6 +1751,17 @@ document.addEventListener('wheel', function(e) {
         grip.innerHTML = `<svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="2.5" cy="2.5" r="1.4"/><circle cx="7.5" cy="2.5" r="1.4"/><circle cx="2.5" cy="7" r="1.4"/><circle cx="7.5" cy="7" r="1.4"/><circle cx="2.5" cy="11.5" r="1.4"/><circle cx="7.5" cy="11.5" r="1.4"/></svg>`;
         zone.appendChild(grip);
         group.insertBefore(zone, group.firstChild);
+
+        // Révèle le grip via mousemove (l'overlay est pointer-events:none,
+        // donc on écoute sur le groupe parent pour ne pas bloquer les clics)
+        group.addEventListener('mousemove', e => {
+          const rect = group.getBoundingClientRect();
+          const inTopZone = (e.clientY - rect.top) <= 34;
+          group.classList.toggle('panel-top-hovered', inTopZone);
+        });
+        group.addEventListener('mouseleave', () => {
+          group.classList.remove('panel-top-hovered');
+        });
       });
     }
 
@@ -1972,5 +2005,25 @@ document.addEventListener('wheel', function(e) {
     requestAnimationFrame(drawFrame);
   })();
 
-  console.log('[TempoMatcher] Prêt.');
+  // ── Export ──────────────────────────────────────────────────────
+  ExportManager.init();
+
+  btnExport.addEventListener('click', () => {
+    if (!audio.audioBuffer) return;
+    ExportManager.open(
+      audio.audioBuffer,
+      audio.volume,
+      {
+        offset:           metro.offset,
+        beatInterval:     metro.beatInterval,
+        beatsPerMeasure:  metro.beatsPerMeasure,
+        measuresPerLoop:  metro.measuresPerLoop,
+        clickProfile:     metro.clickProfile,
+        volume:           metro.volume,
+        bpm:              metro.bpm,
+      },
+      _loadedFileName || 'export'
+    );
+  });
+
 })();
