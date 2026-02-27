@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TempoMatcher</title>
-  <link rel="stylesheet" href="style.css" />
+  <title>TempoMatcher</title>  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
@@ -39,6 +40,10 @@
 
     <!-- Zoom controls -->
     <div id="zoom-controls">
+      <button id="btn-auto-follow" class="active" title="Auto-recentrage (désactiver)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="3" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="21"/><line x1="3" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="21" y2="12"/></svg>
+      </button>
+      <div class="zoom-controls-sep"></div>
       <button id="btn-zoom-out" title="Zoom arrière">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
       </button>
@@ -66,6 +71,37 @@
       <button id="btn-loop" disabled class="loop-btn" title="Lecture en boucle">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
       </button>
+
+      <!-- Séparateur outils -->
+      <div class="transport-sep"></div>
+
+      <!-- Outil déplacer : H -->
+      <div class="tool-btn-wrap">
+        <button id="btn-tool-pan" class="tool-btn active" title="Outil déplacer / naviguer (H)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/>
+            <line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/>
+          </svg>
+        </button>
+        <span class="tool-kbd">H</span>
+      </div>
+
+      <!-- Outil pinceau : B -->
+      <div class="tool-btn-wrap">
+        <button id="btn-brush-toggle" class="tool-btn" title="Outil pinceau – colorier par mesure (B)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <!-- manche diagonal -->
+            <path d="M20.5 3.5l-1-1-11 11v2h2l11-11-1-1z"/>
+            <line x1="7.5" y1="13.5" x2="10.5" y2="16.5"/>
+            <!-- poils du pinceau, arrondi en bas-gauche -->
+            <path d="M5 19c-1 0-2 0.8-2 2s1.5 2 3 1c1-0.7 1.8-2 1.5-3L5 19z"/>
+          </svg>
+        </button>
+        <span class="tool-kbd">B</span>
+      </div>
+
+      <!-- Couleur pinceau -->
+      <input type="color" id="brush-color-picker" value="#ff8800" title="Couleur du pinceau" />
     </div>
 
     <div id="time-display">
@@ -139,11 +175,16 @@
 
     <!-- Offset -->
     <div class="metro-group" id="offset-group">
-      <div class="metro-group-title">DÉCALAGE</div>
+      <div class="metro-group-title-row">
+        <span class="metro-group-title">DÉCALAGE</span>
+        <span id="offset-lock-icon" title="Grille verrouillée sur un pin — déplacer le curseur pour déverrouiller">🔒</span>
+      </div>
       <div class="metro-row">
         <button class="btn-nudge" id="offset-dec" title="-10ms">−10ms</button>
-        <input type="number" id="offset-input" min="-10" max="10" step="0.001" value="0" />
-        <span class="unit-label">s</span>
+        <div class="offset-input-wrap">
+          <input type="number" id="offset-input" min="-10" max="10" step="0.001" value="0.000" />
+          <span class="unit-label">s</span>
+        </div>
         <button class="btn-nudge" id="offset-inc" title="+10ms">+10ms</button>
       </div>
       <input type="range" id="offset-slider" min="-5" max="5" step="0.001" value="0" />
@@ -151,7 +192,20 @@
 
     <!-- Metronome toggle & volume -->
     <div class="metro-group" id="click-group">
-      <div class="metro-group-title">CLIC</div>
+      <div class="metro-group-title-row">
+        <span class="metro-group-title">CLIC</span>
+        <select id="click-profile" class="profile-select" title="Son du clic">
+          <option value="defaut">Défaut</option>
+          <option value="bois">Bois</option>
+          <option value="electro">Électro</option>
+          <option value="doux">Doux</option>
+          <option value="cloche">Cloche</option>
+        </select>
+        <button id="btn-metro-preview" class="metro-preview-btn" title="Écouter le clic seul">
+          <svg id="metro-preview-icon-play" width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+          <svg id="metro-preview-icon-pause" width="9" height="9" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg>
+        </button>
+      </div>
       <div class="click-toggle-row">
         <button id="btn-metro-toggle" class="toggle-btn active" title="Activer / désactiver le clic">ON</button>
       </div>
@@ -161,54 +215,179 @@
       </div>
       <input type="range" id="metro-vol-slider" min="0" max="4" step="0.05" value="1" />
 
-      <!-- Beat colours legend -->
-      <div class="beat-legend">
-        <span class="legend-item"><span class="legend-dot" id="dot-loop"></span>Début boucle</span>
-        <span class="legend-item"><span class="legend-dot" id="dot-down"></span>Temps 1</span>
-        <span class="legend-item"><span class="legend-dot" id="dot-beat"></span>Temps 2-4</span>
+      <!-- Affichage compteur numérique -->
+      <div id="metro-counter" class="metro-counter">
+        <div class="mc-info-row">
+          <span class="mc-info-label">boucle</span>
+          <span id="mc-loop" class="mc-info-val">&ndash;</span>
+          <span class="mc-info-sep">|</span>
+          <span class="mc-info-label">mesure</span>
+          <span id="mc-measure" class="mc-info-val">&ndash;</span>
+        </div>
+        <div id="mc-beats-row" class="mc-beats-row"></div>
       </div>
+
     </div>
 
-    <!-- Amplitude waveform -->
-    <div class="metro-group" id="amplitude-group">
-      <div class="metro-group-title">AMPLITUDE</div>
-      <div class="vol-row">
-        <label class="ctrl-label">SCALE</label>
-        <span id="amplitude-pct" class="slider-pct">100%</span>
+    <!-- Sections pinceau -->
+    <div class="metro-group" id="brush-group">
+      <div class="metro-group-title-row">
+        <span class="metro-group-title">SECTIONS</span>
+        <button id="btn-add-section" class="palette-add-btn" title="Ajouter une section">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
+            <line x1="12" y1="4" x2="12" y2="20"/><line x1="4" y1="12" x2="20" y2="12"/>
+          </svg>
+        </button>
       </div>
-      <input type="range" id="amplitude-slider" min="0.05" max="4" step="0.01" value="0.5" />
-    </div>
-
-    <!-- Wave style -->
-    <div class="metro-group" id="wavestyle-group">
-      <div class="metro-group-title">COULEUR ONDE</div>
-      <div class="color-pick-row">
-        <label class="ctrl-label">COULEUR</label>
-        <input type="color" id="wave-color-picker" value="#3d8edd" title="Couleur de l'onde" />
-      </div>
-      <div class="vol-row">
-        <label class="ctrl-label" for="wave-opacity-slider">OPACITÉ</label>
-        <span id="wave-opacity-pct" class="slider-pct">100%</span>
-      </div>
-      <input type="range" id="wave-opacity-slider" min="0" max="1" step="0.01" value="1" />
+      <div id="brush-palette-list"></div>
     </div>
 
     <!-- Visibilité marqueurs -->
     <div class="metro-group" id="markers-group">
-      <div class="metro-group-title">MARQUEURS</div>
-      <div class="marker-toggles">
-        <div class="marker-row">
-          <button id="btn-show-loop" class="toggle-btn active" title="Afficher / masquer">BOUCLE</button>
-          <input type="color" id="color-loop" value="#ff3355" title="Couleur boucle" />
+      <div class="metro-group-title-row">
+        <span class="metro-group-title">MARQUEURS</span>
+        <select id="marker-profile" class="profile-select" title="Profil visuel">
+          <option value="defaut">Défaut</option>
+          <option value="nocturne">Nocturne</option>
+          <option value="vif">Vif</option>
+          <option value="pastel">Pastel</option>
+          <option value="mono">Monochrome</option>
+        </select>
+        <button id="btn-profile-reset" class="col-reset-btn" title="Réinitialiser le profil">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+        </button>
+      </div>
+      <!-- Grille marqueurs : 4 zones verticales -->
+      <!-- Grille 1 : BOUCLE / MESURE / TEMPS / BANDES -->
+      <div class="markers-grid">
+        <div class="mg-zone mg-zone-btns">
+          <div class="mg-header"></div>
+          <button id="btn-show-loop" class="toggle-btn active" title="Afficher / masquer">BOUCLE<span class="btn-switch"></span></button>
+          <button id="btn-show-measure" class="toggle-btn active" title="Afficher / masquer">MESURE<span class="btn-switch"></span></button>
+          <button id="btn-show-beat" class="toggle-btn active" title="Afficher / masquer">TEMPS<span class="btn-switch"></span></button>
+          <button id="btn-show-bands" class="toggle-btn active" title="Afficher / masquer les bandes de boucle">BANDES<span class="btn-switch"></span></button>
         </div>
-        <div class="marker-row">
-          <button id="btn-show-measure" class="toggle-btn active" title="Afficher / masquer">MESURE</button>
-          <input type="color" id="color-measure" value="#ff8800" title="Couleur mesure" />
+        <div class="mg-zone mg-zone-height">
+          <div class="mg-header mch-label">HAUTEUR
+            <button id="btn-reset-heights" class="col-reset-btn" title="Réinitialiser toutes les hauteurs">
+              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+          </div>
+          <div class="mg-cell">
+            <input type="range" id="loop-bar-height-slider" min="0" max="1" step="0.01" value="1" title="Hauteur des barres de boucle (double-clic = reset)" class="marker-inline-slider" />
+            <span id="loop-bar-height-pct" class="slider-pct">100%</span>
+          </div>
+          <div class="mg-cell">
+            <input type="range" id="measure-bar-height-slider" min="0" max="1" step="0.01" value="0.7" title="Hauteur des barres de mesure (double-clic = reset)" class="marker-inline-slider" />
+            <span id="measure-bar-height-pct" class="slider-pct">70%</span>
+          </div>
+          <div class="mg-cell">
+            <input type="range" id="beat-bar-height-slider" min="0" max="1" step="0.01" value="0.1" title="Hauteur des barres de temps (double-clic = reset)" class="marker-inline-slider" />
+            <span id="beat-bar-height-pct" class="slider-pct">10%</span>
+          </div>
+          <div class="mg-cell">
+            <input type="range" id="band-height-slider" min="0" max="1" step="0.01" value="1" title="Hauteur des bandes (double-clic = reset)" class="marker-inline-slider" />
+            <span id="band-height-pct" class="slider-pct">100%</span>
+          </div>
         </div>
-        <div class="marker-row">
-          <button id="btn-show-beat" class="toggle-btn active" title="Afficher / masquer">TEMPS</button>
-          <input type="color" id="color-beat" value="#33dd88" title="Couleur temps" />
+        <div class="mg-zone mg-zone-color">
+          <div class="mg-header mch-label">COULEUR
+            <button id="btn-reset-colors" class="col-reset-btn" title="Réinitialiser toutes les couleurs">
+              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+          </div>
+          <div class="mg-cell">
+            <input type="color" id="color-loop" value="#ff3355" title="Couleur boucle" />
+            <button class="color-reset-btn" data-target="color-loop" data-default="#ff3355" title="Réinitialiser la couleur">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+          </div>
+          <div class="mg-cell">
+            <input type="color" id="color-measure" value="#ff8800" title="Couleur mesure" />
+            <button class="color-reset-btn" data-target="color-measure" data-default="#ff8800" title="Réinitialiser la couleur">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+          </div>
+          <div class="mg-cell">
+            <input type="color" id="color-beat" value="#33dd88" title="Couleur temps" />
+            <button class="color-reset-btn" data-target="color-beat" data-default="#33dd88" title="Réinitialiser la couleur">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+          </div>
+          <div class="mg-cell">
+            <input type="color" id="color-bands" value="#ffffff" title="Couleur des bandes de boucle" />
+            <button class="color-reset-btn" data-target="color-bands" data-default="#ffffff" title="Réinitialiser la couleur">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+          </div>
         </div>
+        <div class="mg-zone mg-zone-opacity">
+          <div class="mg-header mch-label">OPACITÉ
+            <button id="btn-reset-opacities" class="col-reset-btn" title="Réinitialiser toutes les opacités">
+              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+          </div>
+          <div class="mg-cell">
+            <input type="range" id="loop-opacity-slider" min="0" max="1" step="0.01" value="0.90" class="opacity-inline-slider" title="Opacité (double-clic = reset)" />
+            <span id="loop-opacity-pct" class="slider-pct">90%</span>
+          </div>
+          <div class="mg-cell">
+            <input type="range" id="measure-opacity-slider" min="0" max="1" step="0.01" value="0.75" class="opacity-inline-slider" title="Opacité (double-clic = reset)" />
+            <span id="measure-opacity-pct" class="slider-pct">75%</span>
+          </div>
+          <div class="mg-cell">
+            <input type="range" id="beat-opacity-slider" min="0" max="1" step="0.01" value="0.55" class="opacity-inline-slider" title="Opacité (double-clic = reset)" />
+            <span id="beat-opacity-pct" class="slider-pct">55%</span>
+          </div>
+          <div class="mg-cell">
+            <input type="range" id="band-opacity-slider" min="0" max="1" step="0.01" value="0.07" class="opacity-inline-slider" title="Opacité (double-clic = reset)" />
+            <span id="band-opacity-pct" class="slider-pct">7%</span>
+          </div>
+        </div>
+      </div>
+
+      <hr class="marker-section-sep" />
+
+      <!-- Grille 2 : ONDE (extensible) -->
+      <div class="markers-grid">
+        <div class="mg-zone mg-zone-btns">
+          <button id="btn-show-wave" class="toggle-btn active" title="Afficher / masquer la forme d'onde">ONDE<span class="btn-switch"></span></button>
+        </div>
+        <div class="mg-zone mg-zone-height">
+          <div class="mg-cell">
+            <input type="range" id="amplitude-slider" min="0.05" max="4" step="0.01" value="0.5" title="Amplitude de la forme d'onde (double-clic = reset)" class="marker-inline-slider" />
+            <span id="amplitude-pct" class="slider-pct">50%</span>
+          </div>
+        </div>
+        <div class="mg-zone mg-zone-color">
+          <div class="mg-cell">
+            <input type="color" id="wave-color-picker" value="#3d8edd" title="Couleur de l'onde" />
+            <button id="wave-color-reset-btn" class="color-reset-btn" title="Réinitialiser la couleur de l'onde">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="mg-zone mg-zone-opacity">
+          <div class="mg-cell">
+            <input type="range" id="wave-opacity-slider" min="0" max="1" step="0.01" value="1" class="opacity-inline-slider" title="Opacité de l'onde (double-clic = reset)" />
+            <span id="wave-opacity-pct" class="slider-pct">100%</span>
+          </div>
+        </div>
+      </div>
+     
+    </div>
+
+    <!-- Volume + VU-mètre -->
+    <div class="metro-group" id="volume-group">
+      <div class="metro-group-title">VOLUME</div>
+      <div class="vol-panel-inner">
+        <div class="vol-slider-wrap">
+          <input type="range" id="vol-panel-slider" class="vertical-slider"
+                 min="0" max="4" step="0.05" value="0.8"
+                 title="Volume principal (double-clic = reset)" />
+          <span id="vol-panel-pct" class="vol-panel-pct">80%</span>
+        </div>
+        <canvas id="vu-meter-canvas"></canvas>
       </div>
     </div>
 
@@ -218,6 +397,23 @@
   <div id="loading-overlay">
     <div id="loading-bar-track"><div id="loading-bar"></div></div>
     <span id="loading-label">Décodage audio…</span>
+  </div>
+
+  <!-- Pin popup -->
+  <div id="pin-popup" class="hidden">
+    <button id="pin-btn-close" title="Fermer">✕</button>
+    <div class="pin-popup-title">MARQUEUR</div>
+    <div class="pin-popup-row">
+      <label>Couleur</label>
+      <input type="color" id="pin-color" value="#ffdd00" />
+    </div>
+    <button id="pin-btn-snap">Caler la grille ici</button>
+    <button id="pin-btn-delete">Supprimer</button>
+  </div>
+
+  <!-- Menu contextuel règle (clic droit zone vide) -->
+  <div id="ruler-ctx-menu" class="hidden">
+    <button id="ruler-ctx-delete-all">Supprimer tous les marqueurs</button>
   </div>
 
   <script src="js/metronome.js"></script>

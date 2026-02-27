@@ -2,6 +2,35 @@
  * Metronome — scheduling précis via Web Audio API
  * Utilise le pattern "look-ahead" pour une précision maximale.
  */
+/* Profils sonores du clic */
+const CLICK_PROFILES = {
+  defaut: {
+    loop:     { freq: 2500, duration: 0.06, type: 'square',   attack: 0.002, gain: 1.00 },
+    downbeat: { freq: 1400, duration: 0.05, type: 'square',   attack: 0.003, gain: 0.55 },
+    beat:     { freq:  880, duration: 0.04, type: 'square',   attack: 0.003, gain: 0.45 },
+  },
+  bois: {
+    loop:     { freq: 1800, duration: 0.04, type: 'sawtooth', attack: 0.001, gain: 1.00 },
+    downbeat: { freq: 1200, duration: 0.035,type: 'sawtooth', attack: 0.001, gain: 0.60 },
+    beat:     { freq:  800, duration: 0.03, type: 'sawtooth', attack: 0.001, gain: 0.45 },
+  },
+  electro: {
+    loop:     { freq: 3200, duration: 0.025,type: 'square',   attack: 0.001, gain: 1.00 },
+    downbeat: { freq: 1600, duration: 0.020,type: 'square',   attack: 0.001, gain: 0.65 },
+    beat:     { freq:  900, duration: 0.015,type: 'square',   attack: 0.001, gain: 0.50 },
+  },
+  doux: {
+    loop:     { freq: 2000, duration: 0.09, type: 'sine',     attack: 0.005, gain: 1.00 },
+    downbeat: { freq: 1200, duration: 0.07, type: 'sine',     attack: 0.005, gain: 0.60 },
+    beat:     { freq:  700, duration: 0.06, type: 'sine',     attack: 0.005, gain: 0.45 },
+  },
+  cloche: {
+    loop:     { freq: 2800, duration: 0.22, type: 'sine',     attack: 0.003, gain: 1.00 },
+    downbeat: { freq: 1800, duration: 0.16, type: 'sine',     attack: 0.003, gain: 0.60 },
+    beat:     { freq: 1100, duration: 0.12, type: 'sine',     attack: 0.003, gain: 0.45 },
+  },
+};
+
 class Metronome {
   constructor() {
     this.bpm            = 120;
@@ -10,6 +39,7 @@ class Metronome {
     this.offset         = 0.0;   // décalage en secondes
     this.volume         = 1.0;
     this.enabled        = true;
+    this.clickProfile   = 'defaut';
 
     // Scheduling look-ahead
     this._LOOKAHEAD_MS  = 25;    // intervalle de l'interval JS
@@ -122,38 +152,20 @@ class Metronome {
     osc.connect(env);
     env.connect(this._audioCtx.destination);
 
-    // 3 sons distincts selon la position dans la grille
-    let freq, duration, oscType, attackTime, peakGain;
+    // Sélection du profil et de la couche (loop / downbeat / beat)
+    const profile = CLICK_PROFILES[this.clickProfile] || CLICK_PROFILES.defaut;
+    const layer   = isLoopStart ? profile.loop : (isDownbeat ? profile.downbeat : profile.beat);
 
-    if (isLoopStart) {
-      freq       = 2500;
-      duration   = 0.06;
-      oscType    = 'square';
-      attackTime = 0.002;
-      peakGain   = this.volume;
-    } else if (isDownbeat) {
-      freq       = 1400;
-      duration   = 0.05;
-      oscType    = 'square';
-      attackTime = 0.003;
-      peakGain   = this.volume * 0.55;
-    } else {
-      freq       = 880;
-      duration   = 0.04;
-      oscType    = 'square';
-      attackTime = 0.003;
-      peakGain   = this.volume * 0.45;
-    }
+    osc.type = layer.type;
+    osc.frequency.value = layer.freq;
 
-    osc.type = oscType;
-    osc.frequency.value = freq;
-
+    const peakGain = this.volume * layer.gain;
     env.gain.setValueAtTime(0, time);
-    env.gain.linearRampToValueAtTime(peakGain, time + attackTime);
-    env.gain.exponentialRampToValueAtTime(0.0001, time + duration);
+    env.gain.linearRampToValueAtTime(peakGain, time + layer.attack);
+    env.gain.exponentialRampToValueAtTime(0.0001, time + layer.duration);
 
     osc.start(time);
-    osc.stop(time + duration + 0.005);
+    osc.stop(time + layer.duration + 0.005);
   }
 
   /* ── Mise à jour à chaud ────────────────────────── */

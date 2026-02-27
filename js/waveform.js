@@ -26,9 +26,32 @@ class WaveformRenderer {
     // Playhead
     this.playheadTime  = 0;
     this.isPlaying     = false;
+    this.autoFollow    = true;   // auto-scroll actif par défaut
 
     // Callbacks
     this.onSeek        = null;  // fn(time)
+    this.onPinClick    = null;  // fn(pinIndex, screenX, screenY)
+    this.onPinDragMove = null;  // fn(pinIndex)  — appelé pendant le drag
+
+    // Marqueurs utilisateur (pins)
+    this.pins          = [];    // [{time, color}]
+    this.lockedPinTime = null;  // temps du pin dont la grille est verrouillée
+
+    // Barre pointillée (dernier clic waveform)
+    this.clickMarkerTime = null;
+
+    // Drag d'un pin sur la règle
+    this._pinDrag = { active: false, idx: -1, moved: false, startX: 0, currentTime: 0 };
+
+    // Système de couleurs cyclées par angle d'or (écart ~137.5° entre consécutifs)
+    this._pinNextHue = Math.floor(Math.random() * 360);
+
+    // Survol du losange marker
+    this._markerHovered = false;
+    this._markerAnim    = 0;   // 0 = petit, 1 = grand (interpolé)
+
+    // Animation halo du pin verrouillé
+    this._lockPulse = 0;  // phase (0→360)
 
     // Couleurs des beats
     this.COLORS = {
@@ -49,26 +72,59 @@ class WaveformRenderer {
     // Drag pan
     this._drag = { active: false, startX: 0, startScroll: 0, moved: false };
 
+    // Mode pinceau
+    this.paintBrushMode    = false;   // activé depuis app.js
+    this.paintBrushColor   = '#ff8800';
+    this._brushPainting    = false;
+    this._brushErasing     = false;
+
+    // Palette de sections [{id, color, name}]
+    this.brushPalette      = [];
+    this._paletteIdCounter = 0;
+    this.onPaletteChange   = null;  // fn() → app.js re-rend la liste
+
     // Bandes de groupes de boucles
-    this.loopsPerGroup = 4;
+    this.loopsPerGroup  = 4;
+    this.showLoopBands  = true;
+    this.loopBandColor  = '#ffffff';
 
     // Amplitude (zoom vertical)
     this.amplitudeScale = 0.5;
+    this.showWaveform   = true;   // afficher / masquer la forme d'onde
 
     // Couleur et opacité de la waveform
     this.waveColorFill   = '#1e3d5c';
     this.waveColorStroke = '#3d8edd';
     this.waveOpacity     = 1.0;
 
+    // Opacités configurables par type de marqueur (0 → 1)
+    // Valeurs par défaut = alpha de base utilisé à l'origine dans le code de dessin
+    this.loopOpacity    = 0.90;  // était 0.9 hardcodé
+    this.measureOpacity = 0.75;  // était 0.75 hardcodé
+    this.beatOpacity    = 0.55;  // était 0.55 hardcodé
+    this.bandOpacity    = 0.07;  // était 0.07 hardcodé
+
+    // Outil pinceau : couleurs par index de mesure
+    // Map<measureIdx: int, color: string>
+    this.measureColors   = new Map();
+
     // Visibilité des marqueurs de beats
     this.showLoopMarkers    = true;
     this.showMeasureMarkers = true;
     this.showBeatMarkers    = true;
 
+    // Hauteur relative des barres de mesure (0 → 1)
+    this.measureBarHeight = 0.70;
+
     // Couleurs configurables des marqueurs
     this.markerColorLoop    = '#ff3355';
     this.markerColorMeasure = '#ff8800';
     this.markerColorBeat    = '#33dd88';
+
+    // Hauteurs relatives des marqueurs (0 → 1 = 0% → 100% du canvas)
+    this.loopBarHeight       = 1.0;  // boucle  : pleine hauteur
+    this.beatBarHeight       = 0.10; // temps   : fraction de H (synchro amplitude)
+    this.loopBandHeightScale = 1.0;  // bandes  : pleine hauteur
 
     this._animFrame = null;
     this._dirty     = true;
@@ -175,6 +231,7 @@ class WaveformRenderer {
 
   /** Assure que le playhead reste visible (auto-scroll) */
   followPlayhead() {
+    if (!this.autoFollow) return;
     if (!this.isPlaying) return;
     if (this.zoom < 2.5) return; // pas d'auto-scroll en dessous de 250%
     const pht = this.playheadTime;
@@ -223,9 +280,25 @@ class WaveformRenderer {
   }
 
   _startRenderLoop() {
+    const ANIM_SPEED = 0.10; // pas par frame (~6 frames pour 60fps)
     const loop = () => {
       this._syncSize();
-      if (this._dirty || this.isPlaying) {
+
+      // Avancer l'animation du losange
+      const target = this._markerHovered ? 1 : 0;
+      if (this._markerAnim !== target) {
+        const dir   = target > this._markerAnim ? 1 : -1;
+        this._markerAnim = Math.max(0, Math.min(1, this._markerAnim + dir * ANIM_SPEED));
+        this._dirty = true;
+      }
+
+      // Avancer la pulsation du pin verrouillé
+      if (this.lockedPinTime !== null) {
+        this._lockPulse = (this._lockPulse + 2.5) % 360;
+        this._dirty = true;
+      }
+
+      if (this._dirty || this.isPlaying || this._pinDrag.active) {
         this._draw();
         this._dirty = false;
       }
@@ -255,16 +328,24 @@ class WaveformRenderer {
     // ── Bandes de 4 mesures alternées ──
     this._drawMeasureGroupBands(ctx, W, H);
 
-    // Ligne centrale
-    ctx.strokeStyle = '#222';
-    ctx.lineWidth   = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, H / 2);
-    ctx.lineTo(W, H / 2);
-    ctx.stroke();
-
     // ── Waveform ──
     this._drawWaveShape(ctx, W, H);
+
+    // Ligne centrale horizontale — axe du waveform sur toute la durée du morceau
+    // Dessinée après le waveform pour rester visible par-dessus le remplissage
+    ctx.save();
+    if (this.audioBuffer) {
+      const xStart = this.timeToX(0);
+      const xEnd   = this.timeToX(this.audioBuffer.duration);
+      ctx.strokeStyle = this.waveColorStroke;
+      ctx.lineWidth   = 1;
+      ctx.globalAlpha = 0.7;
+      ctx.beginPath();
+      ctx.moveTo(xStart, H / 2);
+      ctx.lineTo(xEnd,   H / 2);
+      ctx.stroke();
+    }
+    ctx.restore();
 
     // ── Marqueurs de beats ──
     this._drawBeatMarkers(ctx, W, H);
@@ -272,35 +353,102 @@ class WaveformRenderer {
     // ── Début / fin du morceau ──
     this._drawBoundaryMarkers(ctx, W, H);
 
+    // ── Barres pointillées des pins ──
+    this._drawPinLinesOnWave(ctx, W, H);
+
+    // ── Barre pointée (clic waveform ou drag de pin) ──
+    this._drawClickMarkerOnWave(ctx, W, H);
+
     // ── Playhead ──
     this._drawPlayhead(ctx, W, H);
   }
 
+  _drawPinLinesOnWave(ctx, W, H) {
+    if (this.pins.length === 0) return;
+    const startT = this.scrollTime;
+    const pps    = this.pixelsPerSecond;
+    ctx.save();
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1;
+    for (const pin of this.pins) {
+      const x = (pin.time - startT) * pps;
+      if (x < -2 || x > W + 2) continue;
+      ctx.strokeStyle = pin.color || '#ffffff';
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, H);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  _drawClickMarkerOnWave(ctx, W, H) {
+    const t = this._pinDrag.active ? this._pinDrag.currentTime : this.clickMarkerTime;
+    if (t === null) return;
+    const x = (t - this.scrollTime) * this.pixelsPerSecond;
+    if (x < 0 || x > W) return;
+    ctx.save();
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.50)';
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   _drawWaveShape(ctx, W, H) {
     if (!this._peaksMax) return;
+    if (!this.showWaveform) return;
 
-    const visD   = this.visibleDuration;
-    const pps    = W / visD;
-    const midY   = H / 2;
-    const hH     = (midY - 4) * this.amplitudeScale;  // zoom vertical
+    // ── Couche de base : couleur par défaut ──
+    this._drawWaveShapeColored(ctx, W, H, this.waveColorFill, this.waveColorStroke, null, null);
+
+    // ── Couche pinceau : surcharge par mesure ──
+    if (this.measureColors.size > 0) {
+      const visibleMeasures = this._getVisibleMeasureRanges(W);
+      for (const { measureIdx, xStart, xEnd } of visibleMeasures) {
+        const color = this.measureColors.get(measureIdx);
+        if (!color) continue;
+        const r = parseInt(color.slice(1, 3), 16);
+        const g = parseInt(color.slice(3, 5), 16);
+        const b = parseInt(color.slice(5, 7), 16);
+        const fill = `rgb(${Math.round(r * 0.45)},${Math.round(g * 0.45)},${Math.round(b * 0.45)})`;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(xStart, 0, xEnd - xStart, H);
+        ctx.clip();
+        this._drawWaveShapeColored(ctx, W, H, fill, color, null, null);
+        ctx.restore();
+      }
+    }
+  }
+
+  /**
+   * Dessine la forme d'onde avec les couleurs données.
+   * Si clipX0/clipX1 sont fournis, seule cette tranche est dessinée.
+   */
+  _drawWaveShapeColored(ctx, W, H, fillColor, strokeColor, clipX0, clipX1) {
+    const visD     = this.visibleDuration;
+    const pps      = W / visD;
+    const midY     = H / 2;
+    const hH       = (midY - 4) * this.amplitudeScale;
+    const startSec = this.scrollTime;
+    const peakStep = this.duration / this._peakCount;
 
     ctx.globalAlpha = this.waveOpacity;
-    ctx.fillStyle   = this.waveColorFill;
-    ctx.strokeStyle = this.waveColorStroke;
+    ctx.fillStyle   = fillColor;
+    ctx.strokeStyle = strokeColor;
     ctx.lineWidth   = 1;
-
-    // On dessine pixel par pixel en interpolant les pics
-    const startSec = this.scrollTime;
-    const peakStep = this.duration / this._peakCount; // secondes par pic
 
     ctx.beginPath();
     let first = true;
 
-    // Chemin supérieur (max) de gauche à droite
     for (let px = 0; px < W; px++) {
       const t = startSec + px / pps;
       if (t < 0 || t > this.duration) {
-        // zone silencieuse : tracé à la ligne centrale
         const y = midY;
         if (first) { ctx.moveTo(px, y); first = false; }
         else        ctx.lineTo(px, y);
@@ -308,30 +456,20 @@ class WaveformRenderer {
       }
       const pi    = Math.min(this._peakCount - 1, Math.max(0, Math.floor(t / peakStep)));
       const piEnd = Math.min(this._peakCount - 1, Math.ceil((t + 1 / pps) / peakStep));
-
       let mx = this._peaksMax[pi];
-      for (let k = pi; k <= piEnd; k++) {
-        if (this._peaksMax[k] > mx) mx = this._peaksMax[k];
-      }
+      for (let k = pi; k <= piEnd; k++) if (this._peaksMax[k] > mx) mx = this._peaksMax[k];
       const y = midY - Math.min(mx * hH, midY);
       if (first) { ctx.moveTo(px, y); first = false; }
       else        ctx.lineTo(px, y);
     }
 
-    // Chemin inférieur (min) de droite à gauche
     for (let px = W - 1; px >= 0; px--) {
       const t = startSec + px / pps;
-      if (t < 0 || t > this.duration) {
-        ctx.lineTo(px, midY);
-        continue;
-      }
+      if (t < 0 || t > this.duration) { ctx.lineTo(px, midY); continue; }
       const pi    = Math.min(this._peakCount - 1, Math.max(0, Math.floor(t / peakStep)));
       const piEnd = Math.min(this._peakCount - 1, Math.ceil((t + 1 / pps) / peakStep));
-
       let mn = this._peaksMin[pi];
-      for (let k = pi; k <= piEnd; k++) {
-        if (this._peaksMin[k] < mn) mn = this._peaksMin[k];
-      }
+      for (let k = pi; k <= piEnd; k++) if (this._peaksMin[k] < mn) mn = this._peaksMin[k];
       const y = midY - Math.max(mn * hH, -midY);
       ctx.lineTo(px, y);
     }
@@ -342,8 +480,55 @@ class WaveformRenderer {
     ctx.globalAlpha = 1;
   }
 
+  /**
+   * Retourne l'index de mesure absolu pour un temps donné.
+   * Les mesures sont numérotées depuis l'offset (peut être négatif).
+   */
+  getMeasureAtTime(time) {
+    if (!this.metronome || this.metronome.bpm <= 0) return 0;
+    const secPerMeasure = (60 / this.metronome.bpm) * this.metronome.beatsPerMeasure;
+    return Math.floor((time - this.metronome.offset) / secPerMeasure);
+  }
+
+  /**
+   * Retourne les limites temporelles d'une mesure donnée.
+   */
+  getMeasureTimeRange(measureIdx) {
+    const secPerMeasure = (60 / this.metronome.bpm) * this.metronome.beatsPerMeasure;
+    const tStart = this.metronome.offset + measureIdx * secPerMeasure;
+    return { tStart, tEnd: tStart + secPerMeasure };
+  }
+
+  /**
+   * Calcule les plages de mesures visibles avec leurs positions en pixels.
+   * Retourne [{measureIdx, xStart, xEnd}]
+   */
+  _getVisibleMeasureRanges(W) {
+    if (!this.metronome || this.metronome.bpm <= 0) return [];
+    const secPerMeasure = (60 / this.metronome.bpm) * this.metronome.beatsPerMeasure;
+    const pps           = this.pixelsPerSecond;
+    const startT        = this.scrollTime;
+    const endT          = startT + W / pps;
+
+    const mStart = Math.floor((startT - this.metronome.offset) / secPerMeasure) - 1;
+    const mEnd   = Math.ceil( (endT   - this.metronome.offset) / secPerMeasure) + 1;
+
+    const result = [];
+    for (let m = mStart; m <= mEnd; m++) {
+      const tL = this.metronome.offset + m * secPerMeasure;
+      const tR = tL + secPerMeasure;
+      if (tR <= 0 || tL >= this.duration) continue;
+      const xStart = Math.max(0,  (tL - startT) * pps);
+      const xEnd   = Math.min(W,  (tR - startT) * pps);
+      if (xEnd <= xStart) continue;
+      result.push({ measureIdx: m, xStart, xEnd });
+    }
+    return result;
+  }
+
   _drawMeasureGroupBands(ctx, W, H) {
     if (!this.metronome || !this.audioBuffer) return;
+    if (!this.showLoopBands) return;
 
     const bpm             = this.metronome.bpm;
     const beatsPerMeasure = this.metronome.beatsPerMeasure;
@@ -361,8 +546,6 @@ class WaveformRenderer {
     const gStart = Math.floor((startT - offset) / secPerGroup) - 1;
     const gEnd   = Math.ceil((endT   - offset) / secPerGroup) + 1;
 
-    const COLOR_A = 'rgba(255,255,255,0.055)';
-
     for (let g = gStart; g <= gEnd; g++) {
       // Modulo sûr pour les indices négatifs
       if (((g % 2) + 2) % 2 === 0) continue; // groupes pairs = fond normal
@@ -377,9 +560,10 @@ class WaveformRenderer {
       const cx1 = Math.min(W, (tEnd          - startT) * pps);
       if (cx1 <= cx0) continue;
 
-      ctx.fillStyle   = COLOR_A;
-      ctx.globalAlpha = 1;
-      ctx.fillRect(cx0, 0, cx1 - cx0, H);
+      ctx.fillStyle   = this.loopBandColor;
+      ctx.globalAlpha = this.bandOpacity;
+      const bandH = H * this.loopBandHeightScale;
+      ctx.fillRect(cx0, (H - bandH) / 2, cx1 - cx0, bandH);
     }
     ctx.globalAlpha = 1;
   }
@@ -394,26 +578,44 @@ class WaveformRenderer {
     const pps    = this.pixelsPerSecond;
 
     for (const b of beats) {
-      if (b.time > this.duration) continue;  // ne pas dépasser la fin du morceau
+      if (b.time > this.duration) continue;
       const x = (b.time - startT) * pps;
       if (x < 0 || x > W) continue;
 
-      let color, lineH, lineW;
+      // ── Système de fallback par priorité décroissante ──────────────
+      // Tier 1 (rouge)  : marqueur de boucle
+      // Tier 2 (orange) : début de mesure
+      // Tier 3 (vert)   : temps intermédiaire
+      // Si un tier est masqué, on dessine le tier inférieur visible suivant.
+
+      let color, lineH, lineW, alpha;
+      const isMeasureStart = b.beatInMeasure === 0;
 
       if (b.isLoopStart) {
-        if (!this.showLoopMarkers) continue;
-        color = this.markerColorLoop; lineH = H; lineW = 2;
-      } else if (b.beatInMeasure === 0) {
-        if (!this.showMeasureMarkers) continue;
-        color = this.markerColorMeasure; lineH = H * 0.85; lineW = 1.5;
+        if (this.showLoopMarkers) {
+          color = this.markerColorLoop; lineH = H * this.loopBarHeight; lineW = 2; alpha = this.loopOpacity;
+        } else if (this.showMeasureMarkers) {
+          color = this.markerColorMeasure; lineH = H * this.measureBarHeight; lineW = 1.5; alpha = this.measureOpacity;
+        } else if (this.showBeatMarkers) {
+          color = this.markerColorBeat; lineH = H * this.beatBarHeight * this.amplitudeScale * 2.0; lineW = 1; alpha = this.beatOpacity;
+        } else {
+          continue;
+        }
+      } else if (isMeasureStart) {
+        if (this.showMeasureMarkers) {
+          color = this.markerColorMeasure; lineH = H * this.measureBarHeight; lineW = 1.5; alpha = this.measureOpacity;
+        } else if (this.showBeatMarkers) {
+          color = this.markerColorBeat; lineH = H * this.beatBarHeight * this.amplitudeScale * 2.0; lineW = 1; alpha = this.beatOpacity;
+        } else {
+          continue;
+        }
       } else {
         if (!this.showBeatMarkers) continue;
-        color  = this.markerColorBeat;
-        lineH  = Math.min(H, H * 0.6 * this.amplitudeScale);
-        lineW  = 1;
+        color = this.markerColorBeat;
+        lineH = H * this.beatBarHeight * this.amplitudeScale * 2.0;
+        lineW = 1; alpha = this.beatOpacity;
       }
 
-      const alpha = b.isLoopStart ? 0.9 : (b.beatInMeasure === 0 ? 0.75 : 0.55);
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = color;
       ctx.lineWidth   = lineW;
@@ -422,14 +624,25 @@ class WaveformRenderer {
       ctx.lineTo(x, (H + lineH) / 2);
       ctx.stroke();
 
-      // Étiquette numéro de mesure au début de chaque mesure
-      if (b.beatInMeasure === 0) {
+      // Étiquette (toujours avec la couleur effective du tier affiché)
+      if (isMeasureStart || b.isLoopStart) {
         ctx.globalAlpha = 0.7;
         ctx.fillStyle   = color;
-        ctx.font        = '10px monospace';
         ctx.textAlign   = 'left';
-        const measureNum = b.measureIdx + 1;
-        ctx.fillText(`M${measureNum}`, x + 3, 11);
+
+        if (b.isLoopStart) {
+          // Numéro de boucle calculé depuis le temps absolu
+          const loopDuration = this.metronome.totalBeats * this.metronome.beatInterval;
+          const loopNum = loopDuration > 0
+            ? Math.floor((b.time - this.metronome.offset) / loopDuration) + 1
+            : 1;
+          ctx.font = '9px monospace';
+          ctx.fillText(`B${loopNum}`, x + 3, 11);
+        } else {
+          // "MN" — numéro de mesure classique
+          ctx.font = '10px monospace';
+          ctx.fillText(`M${b.measureIdx + 1}`, x + 3, 11);
+        }
       }
     }
 
@@ -466,6 +679,48 @@ class WaveformRenderer {
       ctx.fillText(label, time === 0 ? x + 4 : x - 4, H - 6);
       ctx.restore();
     }
+  }
+
+  _drawSectionLabels(ctx, W, H) {
+    // Dessiné dans le canvas de la règle : position y = haut de la règle
+    if (this.measureColors.size === 0 || this.brushPalette.length === 0) return;
+
+    const visibleMeasures = this._getVisibleMeasureRanges(W);
+    if (visibleMeasures.length === 0) return;
+
+    ctx.save();
+    ctx.font      = 'bold 9px monospace';
+    ctx.textAlign = 'left';
+
+    for (const { measureIdx, xStart } of visibleMeasures) {
+      const color = this.measureColors.get(measureIdx);
+      if (!color) continue;
+
+      // Première mesure d'une section : couleur différente de la précédente
+      const prevColor = this.measureColors.get(measureIdx - 1);
+      if (prevColor === color) continue;
+
+      const entry = this.brushPalette.find(e => e.color === color);
+      if (!entry || !entry.name) continue;
+
+      const label   = entry.name.toUpperCase();
+      const x       = xStart + 3;
+      const y       = 9; // haut de la règle (24px hauteur)
+
+      const metrics = ctx.measureText(label);
+      const tw      = metrics.width + 6;
+
+      // Petit rectangle coloré fond
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle   = color;
+      ctx.fillRect(x - 2, y - 8, tw, 11);
+
+      // Texte blanc
+      ctx.globalAlpha = 1;
+      ctx.fillStyle   = '#000';
+      ctx.fillText(label, x, y);
+    }
+    ctx.restore();
   }
 
   _drawPlayhead(ctx, W, H) {
@@ -564,6 +819,160 @@ class WaveformRenderer {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(phX - 0.5, 0, 1, H);
     }
+
+    // Barre pointillée du marqueur de clic
+    if (!this._pinDrag.active && this.clickMarkerTime !== null) {
+      const cx = (this.clickMarkerTime - startT) * pps;
+      if (cx >= -12 && cx <= W + 12) {
+        // Trait pointillé blanc
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+        ctx.lineWidth   = 1;
+        ctx.beginPath();
+        ctx.moveTo(cx, 0);
+        ctx.lineTo(cx, H);
+        ctx.stroke();
+        ctx.restore();
+        // Losange animé au survol
+        const t  = this._markerAnim;
+        const s  = 5 + 3 * t;                         // 5 → 8
+        const blur = 7 + 5 * t;                        // 7 → 12
+        const cy = H / 2;
+        ctx.fillStyle   = 'rgba(255,220,80,0.90)';
+        ctx.shadowColor = 'rgba(255,200,40,0.70)';
+        ctx.shadowBlur  = blur;
+        ctx.beginPath();
+        ctx.moveTo(cx,     cy - s);
+        ctx.lineTo(cx + s, cy);
+        ctx.lineTo(cx,     cy + s);
+        ctx.lineTo(cx - s, cy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+    }
+
+    // Barres pointillées pour chaque pin sur la règle
+    if (this.pins.length > 0) {
+      ctx.save();
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1;
+      for (const pin of this.pins) {
+        const cx = (pin.time - startT) * pps;
+        if (cx < -2 || cx > W + 2) continue;
+        ctx.strokeStyle = pin.color || '#ffffff';
+        ctx.globalAlpha = 0.55;
+        ctx.beginPath();
+        ctx.moveTo(cx, 0);
+        ctx.lineTo(cx, H);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Labels de sections pinceau (en haut de la règle, avant les pins)
+    this._drawSectionLabels(ctx, W, H);
+
+    // Pins utilisateur
+    this._drawPins(ctx, W, H);
+  }
+
+  _drawPins(ctx, W, H) {
+    const startT = this.scrollTime;
+    const pps    = this.pixelsPerSecond;
+    const r      = 7;          // rayon de la partie circulaire
+    const cY     = H - r - 1; // centre du cercle (bas)
+    const tipY   = 1;          // pointe haute
+
+    for (const pin of this.pins) {
+      const x      = (pin.time - startT) * pps;
+      if (x < -r - 4 || x > W + r + 4) continue;
+
+      const locked = (pin.time === this.lockedPinTime);
+      const color  = pin.color || '#ffffff';
+
+      // ─ Halo de base coloré (pulsant si verrouillé)
+      if (locked) {
+        const pulse     = 0.5 + 0.5 * Math.sin(this._lockPulse * Math.PI / 180);
+        ctx.shadowColor = color;
+        ctx.shadowBlur  = 18 + 10 * pulse;
+      } else {
+        ctx.shadowColor = color;
+        ctx.shadowBlur  = 14;
+      }
+
+      // ─ Forme goutte d'eau (remplie)
+      ctx.beginPath();
+      ctx.moveTo(x, tipY);
+      ctx.bezierCurveTo(x + r * 0.5, tipY + (cY - tipY) * 0.5,
+                        x + r,       cY - r * 0.5,
+                        x + r,       cY);
+      ctx.arc(x, cY, r, 0, Math.PI, false);
+      ctx.bezierCurveTo(x - r,       cY - r * 0.5,
+                        x - r * 0.5, tipY + (cY - tipY) * 0.5,
+                        x,           tipY);
+      ctx.closePath();
+      ctx.fillStyle   = color;
+      ctx.globalAlpha = 0.92;
+      ctx.fill();
+
+      // ─ Contour épais pour le pin verrouillé (blanc semi-transparent = toujours plus clair que le remplissage)
+      if (locked) {
+        const pulse   = 0.5 + 0.5 * Math.sin(this._lockPulse * Math.PI / 180);
+        ctx.shadowColor = color;
+        ctx.shadowBlur  = 10 + 8 * pulse;
+        ctx.strokeStyle = `rgba(255,255,255,${0.55 + 0.20 * pulse})`;
+        ctx.lineWidth   = 2.5;
+        ctx.globalAlpha = 1;
+        ctx.stroke();
+
+        // ─ Icône cadenas dans le cercle
+        ctx.shadowBlur = 0;
+        this._drawLockIcon(ctx, x, cY, r, pulse);
+      }
+
+      ctx.shadowBlur  = 0;
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  /** Dessine un petit cadenas dans le cercle de la goutte verrouillée */
+  _drawLockIcon(ctx, cx, cy, r, pulse = 0.75) {
+    const bW = r * 0.72;
+    const bH = r * 0.58;
+    const bX = cx - bW / 2;
+    const bY = cy - bH * 0.3;
+    const arcR = bW * 0.38;
+    const alpha = 0.55 + 0.20 * pulse;
+
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle   = 'rgba(255,255,255,1)';
+    ctx.strokeStyle = 'rgba(255,255,255,1)';
+    ctx.lineWidth   = 1;
+
+    // Corps rect arrondi
+    const br = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(bX + br, bY);
+    ctx.lineTo(bX + bW - br, bY);
+    ctx.quadraticCurveTo(bX + bW, bY, bX + bW, bY + br);
+    ctx.lineTo(bX + bW, bY + bH - br);
+    ctx.quadraticCurveTo(bX + bW, bY + bH, bX + bW - br, bY + bH);
+    ctx.lineTo(bX + br, bY + bH);
+    ctx.quadraticCurveTo(bX, bY + bH, bX, bY + bH - br);
+    ctx.lineTo(bX, bY + br);
+    ctx.quadraticCurveTo(bX, bY, bX + br, bY);
+    ctx.closePath();
+    ctx.fill();
+
+    // Anse du cadenas (demi-cercle)
+    ctx.beginPath();
+    ctx.arc(cx, bY, arcR, Math.PI, 0, false);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.globalAlpha = 1;
   }
 
   /* ── Interactions souris ────────────────────────── */
@@ -576,7 +985,12 @@ class WaveformRenderer {
     wc.addEventListener('mousedown', (e) => this._onMouseDown(e));
     wc.addEventListener('mousemove', (e) => this._onMouseMove(e));
     wc.addEventListener('mouseup',   (e) => this._onMouseUp(e));
+    wc.addEventListener('contextmenu', (e) => {
+      if (this.paintBrushMode) e.preventDefault();
+    });
     wc.addEventListener('mouseleave',(e) => {
+      this._brushPainting = false;
+      this._brushErasing  = false;
       // Annuler le drag sans seek quand le curseur sort
       if (this._drag.active) {
         this._drag.active = false;
@@ -585,7 +999,49 @@ class WaveformRenderer {
       }
     });
 
-    rc.addEventListener('mousedown', (e) => this._onRulerClick(e));
+    rc.addEventListener('mousedown', (e) => this._onRulerMouseDown(e));
+    rc.addEventListener('mouseup',   (e) => this._onRulerMouseUp(e));
+    rc.addEventListener('contextmenu', (e) => e.preventDefault());
+    rc.addEventListener('mouseleave', () => {
+      if (this._markerHovered) { this._markerHovered = false; this._dirty = true; }
+    });
+
+    // Curseur sur la règle : pointer quand on survole un pin ou le marker
+    rc.addEventListener('mousemove', (e) => {
+      if (!this.audioBuffer) return;
+      const x   = this._getClientX(rc, e);
+      const pps = this.pixelsPerSecond;
+
+      // Si drag de pin en cours → mettre à jour la position
+      if (this._pinDrag.active) {
+        const newT = this.xToTime(x);
+        this._pinDrag.currentTime = Math.max(0, Math.min(this.duration, newT));
+        this.pins[this._pinDrag.idx].time = this._pinDrag.currentTime;
+        this._pinDrag.moved = true;
+        if (this.onPinDragMove) this.onPinDragMove(this._pinDrag.idx);
+        this._dirty = true;
+        return;
+      }
+
+      const HIT       = 11;
+      const hitPin    = this.pins.some(p => Math.abs((p.time - this.scrollTime) * pps - x) <= HIT);
+      const hitMarker = this.clickMarkerTime !== null &&
+                        Math.abs((this.clickMarkerTime - this.scrollTime) * pps - x) <= HIT;
+
+      // Effet survol du losange
+      const newHovered = hitMarker && !hitPin;
+      if (newHovered !== this._markerHovered) {
+        this._markerHovered = newHovered;
+        this._dirty = true;
+      }
+
+      rc.style.cursor = (hitPin || hitMarker) ? 'pointer' : (this._pinDrag.active ? 'ew-resize' : 'default');
+    });
+
+    // Fin drag pin si souris relâchée hors du canvas règle
+    document.addEventListener('mouseup', (e) => {
+      if (this._pinDrag.active) this._onRulerMouseUp(e);
+    });
 
     // Zoom à la molette
     wc.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
@@ -599,6 +1055,22 @@ class WaveformRenderer {
 
   _onMouseDown(e) {
     if (!this.audioBuffer) return;
+    if (this.paintBrushMode) {
+      if (e.button === 0) {
+        this._brushPainting = true;
+        this._paintMeasureAtX(this._getClientX(this.waveCanvas, e));
+      } else if (e.button === 2) {
+        // Clic droit : démarrer l'effacement continu par glisser
+        this._brushErasing = true;
+        const x    = this._getClientX(this.waveCanvas, e);
+        const time = this.xToTime(x);
+        if (time >= 0 && time <= this.duration) {
+          this.measureColors.delete(this.getMeasureAtTime(time));
+          this._dirty = true;
+        }
+      }
+      return;
+    }
     if (e.button === 0) {
       const x = this._getClientX(this.waveCanvas, e);
       this._drag.active      = true;
@@ -609,6 +1081,22 @@ class WaveformRenderer {
   }
 
   _onMouseMove(e) {
+    if (this.paintBrushMode) {
+      if (this._brushPainting) {
+        this._paintMeasureAtX(this._getClientX(this.waveCanvas, e));
+      } else if (this._brushErasing) {
+        const x    = this._getClientX(this.waveCanvas, e);
+        const time = this.xToTime(x);
+        if (time >= 0 && time <= this.duration) {
+          const mIdx = this.getMeasureAtTime(time);
+          if (this.measureColors.has(mIdx)) {
+            this.measureColors.delete(mIdx);
+            this._dirty = true;
+          }
+        }
+      }
+      return;
+    }
     if (!this._drag.active) return;
     const x  = this._getClientX(this.waveCanvas, e);
     const dx = x - this._drag.startX;
@@ -623,10 +1111,17 @@ class WaveformRenderer {
   }
 
   _onMouseUp(e) {
+    if (this.paintBrushMode) {
+      this._brushPainting = false;
+      this._brushErasing  = false;
+      return;
+    }
     if (!this._drag.active) return;
     if (!this._drag.moved) {
-      // Clic simple → seek
+      // Clic simple → seek + poser la barre pointillée
       const x = this._getClientX(this.waveCanvas, e);
+      const t = this.xToTime(x);
+      this.clickMarkerTime = Math.max(0, Math.min(this.duration, t));
       this._seekToX(x);
     }
     this._drag.active = false;
@@ -634,11 +1129,92 @@ class WaveformRenderer {
     this.waveCanvas.style.cursor = 'crosshair';
   }
 
-  _onRulerClick(e) {
+  _onRulerMouseDown(e) {
     if (!this.audioBuffer) return;
-    const x = this._getClientX(this.rulerCanvas, e);
+    const x   = this._getClientX(this.rulerCanvas, e);
+    const pps = this.pixelsPerSecond;
+    const HIT = 11;
+
+    // Clic droit → supprimer le pin survolé, sinon menu vide
+    if (e.button === 2) {
+      for (let i = 0; i < this.pins.length; i++) {
+        const px = (this.pins[i].time - this.scrollTime) * pps;
+        if (Math.abs(px - x) <= HIT) {
+          if (this.onPinDelete) this.onPinDelete(i);
+          this.pins.splice(i, 1);
+          this._dirty = true;
+          return;
+        }
+      }
+      // Aucun pin touché → menu contextuel général
+      if (this.onRulerEmptyRightClick) this.onRulerEmptyRightClick(e.clientX, e.clientY);
+      return;
+    }
+
+    if (e.button !== 0) return;
+
+    // Priorité 1 : clic/drag sur un pin existant
+    for (let i = 0; i < this.pins.length; i++) {
+      const px = (this.pins[i].time - this.scrollTime) * pps;
+      if (Math.abs(px - x) <= HIT) {
+        this._pinDrag = {
+          active:      true,
+          idx:         i,
+          moved:       false,
+          startX:      e.clientX,
+          currentTime: this.pins[i].time,
+        };
+        this.rulerCanvas.style.cursor = 'ew-resize';
+        return;
+      }
+    }
+
+    // Priorité 2 : clic sur le marqueur clickMarkerTime → poser un pin là
+    if (this.clickMarkerTime !== null) {
+      const cmX = (this.clickMarkerTime - this.scrollTime) * pps;
+      if (Math.abs(cmX - x) <= HIT) {
+        this.pins.push({ time: this.clickMarkerTime, color: this._randomPinColor() });
+        this.clickMarkerTime = null;
+        this._dirty = true;
+        return;
+      }
+    }
+
+    // Priorité 3 : nouveau pin à l'endroit cliqué
     const t = this.xToTime(x);
-    if (this.onSeek) this.onSeek(Math.max(0, Math.min(this.duration, t)));
+    const clamped = Math.max(0, Math.min(this.duration, t));
+    this.pins.push({ time: clamped, color: this._randomPinColor() });
+    this._dirty = true;
+  }
+
+  _onRulerMouseUp(e) {
+    if (!this._pinDrag.active) return;
+    if (!this._pinDrag.moved) {
+      // Clic court → popup
+      if (this.onPinClick) this.onPinClick(this._pinDrag.idx, e.clientX, e.clientY);
+    }
+    this._pinDrag.active = false;
+    this._pinDrag.moved  = false;
+    this.rulerCanvas.style.cursor = 'default';
+    this._dirty = true;
+  }
+
+  _paintMeasureAtX(x) {
+    const time  = this.xToTime(x);
+    if (time < 0 || time > this.duration) return;
+    const mIdx  = this.getMeasureAtTime(time);
+    const color = this.paintBrushColor;
+    const oldColor = this.measureColors.get(mIdx);
+    if (oldColor === color) return;
+    this.measureColors.set(mIdx, color);
+    // Ajouter à la palette si absent
+    const inPalette = this.brushPalette.some(e => e.color === color);
+    if (!inPalette) {
+      const num = this.brushPalette.length + 1;
+      this.brushPalette.push({ id: ++this._paletteIdCounter, color, name: 'Section ' + num });
+      if (this.onPaletteChange) this.onPaletteChange();
+    }
+    this._dirty = true;
   }
 
   _seekToX(x) {
@@ -675,4 +1251,13 @@ class WaveformRenderer {
   }
 
   markDirty() { this._dirty = true; }
+
+  _randomPinColor() {
+    // Rotation par angle d'or : chaque nouvelle couleur est à ~137.5° de la précédente
+    // => couleurs toujours bien écartées et cycle complet avant répétition
+    const GOLDEN_ANGLE = 137.508;
+    const hue = Math.round(this._pinNextHue);
+    this._pinNextHue = (this._pinNextHue + GOLDEN_ANGLE) % 360;
+    return `hsl(${hue},82%,62%)`;
+  }
 }

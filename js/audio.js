@@ -31,14 +31,34 @@ class AudioEngine {
     if (!this._ctx) {
       this._ctx      = new (window.AudioContext || window.webkitAudioContext)();
       this._gainNode = this._ctx.createGain();
-      this._gainNode.connect(this._ctx.destination);
       this._gainNode.gain.value = this.volume;
+      this._gainNode.connect(this._ctx.destination);
+
+      // ── VU-mètre stéréo ────────────────────────────────────────────
+      // StereoPannerNode force la sortie en 2 canaux (même pour un source mono)
+      const panner   = this._ctx.createStereoPanner();
+      panner.pan.value = 0;
+      const splitter = this._ctx.createChannelSplitter(2);
+
+      this._analyserL = this._ctx.createAnalyser();
+      this._analyserR = this._ctx.createAnalyser();
+      this._analyserL.fftSize = 1024;
+      this._analyserR.fftSize = 1024;
+      this._analyserL.smoothingTimeConstant = 0.80;
+      this._analyserR.smoothingTimeConstant = 0.80;
+
+      this._gainNode.connect(panner);
+      panner.connect(splitter);
+      splitter.connect(this._analyserL, 0);
+      splitter.connect(this._analyserR, 1);
     }
     return this._ctx;
   }
 
   get audioContext() { return this._ctx; }
   get audioBuffer()  { return this._audioBuffer; }
+  get analyserL()    { return this._analyserL; }
+  get analyserR()    { return this._analyserR; }
   get isPlaying()    { return this._isPlaying; }
   get duration()     { return this._audioBuffer ? this._audioBuffer.duration : 0; }
 
