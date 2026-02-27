@@ -68,12 +68,48 @@ body {
 }
 
 #app-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.12em;
 }
 .title-tempo   { color: var(--accent); }
 .title-matcher { color: var(--text); }
+
+/* Bouton GitHub Star */
+.gh-star-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 7px;
+  border: 1px solid rgba(255,255,255,0.13);
+  border-radius: 5px;
+  background: rgba(255,255,255,0.04);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  font-family: inherit;
+  transition: background 0.14s, border-color 0.14s, color 0.14s;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.gh-star-btn:hover {
+  background: rgba(255,255,255,0.09);
+  border-color: rgba(255,255,255,0.28);
+  color: var(--text);
+}
+.gh-star-btn:hover .gh-star-icon {
+  color: #f5c518;
+}
+.gh-star-icon {
+  color: rgba(245, 197, 24, 0.65);
+  transition: color 0.14s;
+  flex-shrink: 0;
+}
 
 #file-info {
   display: flex;
