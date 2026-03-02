@@ -58,6 +58,11 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
       </button>
       <button id="btn-zoom-fit" title="Tout afficher">FIT</button>
+      <div class="zoom-controls-sep"></div>
+      <select id="view-mode-select" title="Mode de visualisation" class="view-mode-select">
+        <option value="classic">Classique</option>
+        <option value="spectral">Spectral</option>
+      </select>
     </div>
   </section>
 
@@ -201,6 +206,10 @@
         <button class="btn-nudge" id="offset-inc" title="+10ms">+10ms</button>
       </div>
       <input type="range" id="offset-slider" min="-5" max="5" step="0.001" value="0" />
+      <button id="btn-snap-playhead" title="Poser un marqueur sur la tête de lecture et verrouiller la grille dessus">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Caler sur la tête de lecture
+      </button>
     </div>
 
     <!-- Metronome toggle & volume -->
@@ -259,13 +268,35 @@
     <div class="metro-group" id="markers-group">
       <div class="metro-group-title-row">
         <span class="metro-group-title">MARQUEURS</span>
-        <select id="marker-profile" class="profile-select" title="Profil visuel">
-          <option value="defaut">Défaut</option>
-          <option value="nocturne">Nocturne</option>
-          <option value="vif">Vif</option>
-          <option value="pastel">Pastel</option>
-          <option value="mono">Monochrome</option>
-        </select>
+        <button id="btn-add-profile" class="palette-add-btn profile-add-btn" title="Enregistrer ce style comme nouveau profil" disabled>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
+            <line x1="12" y1="4" x2="12" y2="20"/><line x1="4" y1="12" x2="20" y2="12"/>
+          </svg>
+        </button>
+        <!-- Zone sélecteur (visible par défaut) -->
+        <div id="profile-select-wrap" class="profile-ctrls-wrap">
+          <select id="marker-profile" class="profile-select" title="Profil visuel">
+            <option value="defaut">Défaut</option>
+            <option value="nocturne">Nocturne</option>
+            <option value="vif">Vif</option>
+            <option value="pastel">Pastel</option>
+            <option value="mono">Monochrome</option>
+            <option value="personnalise">Personnalisé</option>
+          </select>
+          <button id="btn-del-profile" class="col-reset-btn profile-del-btn" title="Supprimer ce profil" style="display:none">
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+          </button>
+        </div>
+        <!-- Zone saisie nom (cachée par défaut) -->
+        <div id="profile-name-wrap" class="profile-ctrls-wrap" style="display:none">
+          <input type="text" id="profile-name-input" class="profile-name-input" placeholder="Nom du profil…" maxlength="40" autocomplete="off" spellcheck="false" />
+          <button id="btn-profile-name-ok" class="palette-add-btn profile-name-ok-btn" title="Confirmer (Entrée)">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </button>
+          <button id="btn-profile-name-cancel" class="col-reset-btn" title="Annuler (Échap)">
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
         <button id="btn-profile-reset" class="col-reset-btn" title="Réinitialiser le profil">
           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
         </button>
@@ -278,8 +309,9 @@
           <button id="btn-show-loop" class="toggle-btn active" title="Afficher / masquer">BOUCLE<span class="btn-switch"></span></button>
           <button id="btn-show-measure" class="toggle-btn active" title="Afficher / masquer">MESURE<span class="btn-switch"></span></button>
           <button id="btn-show-beat" class="toggle-btn active" title="Afficher / masquer">TEMPS<span class="btn-switch"></span></button>
-          <button id="btn-show-bands" class="toggle-btn active" title="Afficher / masquer les bandes de boucle">BANDES<span class="btn-switch"></span></button>
+          <button id="btn-show-bands" class="toggle-btn" title="Afficher / masquer les bandes de boucle">BANDES<span class="btn-switch"></span></button>
         </div>
+
         <div class="mg-zone mg-zone-height">
           <div class="mg-header mch-label">HAUTEUR
             <button id="btn-reset-heights" class="col-reset-btn" title="Réinitialiser toutes les hauteurs">
@@ -295,7 +327,7 @@
             <span id="measure-bar-height-pct" class="slider-pct">70%</span>
           </div>
           <div class="mg-cell">
-            <input type="range" id="beat-bar-height-slider" min="0" max="1" step="0.01" value="0.1" title="Hauteur des barres de temps (double-clic = reset)" class="marker-inline-slider" />
+            <input type="range" id="beat-bar-height-slider" min="0" max="1" step="0.01" value="0.05" title="Hauteur des barres de temps (double-clic = reset)" class="marker-inline-slider" />
             <span id="beat-bar-height-pct" class="slider-pct">10%</span>
           </div>
           <div class="mg-cell">
@@ -387,7 +419,7 @@
           </div>
         </div>
       </div>
-     
+
     </div>
 
     <!-- Volume + VU-mètre -->

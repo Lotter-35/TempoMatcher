@@ -366,6 +366,19 @@ document.addEventListener('wheel', function(e) {
       return;
     }
 
+    // Arrêter le métronome (preview ou lecture) avant de charger une nouvelle piste
+    stopMetroPreview();
+    metro.stop();
+    audio.stop();
+    waveform.isPlaying    = false;
+    waveform.playheadTime = 0;
+    timeCurrent.textContent = formatTime(0);
+    updatePlayIcons();
+    resetMetroCounter();
+    // Vider les couleurs pinceau de l'ancienne piste
+    waveform.measureColors.clear();
+    waveform.markDirty();
+
     showLoading('Chargement…', 0);
 
     audio.onLoading = p => {
@@ -512,16 +525,18 @@ document.addEventListener('wheel', function(e) {
   /* ══ Volume ═════════════════════════════════════════════════════ */
 
   function pct(v) { return Math.round(v * 100) + '%'; }
-
-  volumeSlider.addEventListener('input', () => {
-    const v = parseFloat(volumeSlider.value);
-    audio.setVolume(v);
+  function syncVolDisplays(v) {
     volumePct.textContent = pct(v);
-    // sync panneau volume
     const ps = document.getElementById('vol-panel-slider');
     const pp = document.getElementById('vol-panel-pct');
     if (ps) ps.value = v;
     if (pp) pp.textContent = pct(v);
+  }
+
+  volumeSlider.addEventListener('input', () => {
+    const v = parseFloat(volumeSlider.value);
+    audio.setVolume(v);
+    syncVolDisplays(v);
   });
 
   /* ══ Zoom ════════════════════════════════════════════════════════ */
@@ -542,6 +557,24 @@ document.addEventListener('wheel', function(e) {
       ? 'Auto-recentrage (désactiver)'
       : 'Auto-recentrage (activer)';
   });
+
+  /* ══ Mode de visualisation ══════════════════════════════════════════════ */
+
+  const viewModeSelect = $('view-mode-select');
+  if (viewModeSelect) {
+    viewModeSelect.addEventListener('change', () => {
+      waveform.viewMode = viewModeSelect.value;
+      if (viewModeSelect.value === 'spectral') {
+        deactivateBrush();
+        btnBrushToggle.disabled = true;
+        btnBrushToggle.title    = 'Non disponible en mode Spectral';
+      } else {
+        btnBrushToggle.disabled = false;
+        btnBrushToggle.title    = 'Outil pinceau – colorier par mesure (B)';
+      }
+      waveform.markDirty();
+    });
+  }
 
   // Mettre à jour le label de zoom lors du zoom molette
   const _origZoomIn  = waveform.zoomIn.bind(waveform);
@@ -731,6 +764,7 @@ document.addEventListener('wheel', function(e) {
     waveform.measureBarHeight = v;
     measureBarHeightPct.textContent = pct(v);
     waveform.markDirty();
+    updateProfileSelect();
   });
 
   /* ══ Couleur & opacité waveform ══════════════════════════════════════ */
@@ -744,15 +778,18 @@ document.addEventListener('wheel', function(e) {
     const b = parseInt(hex.slice(5, 7), 16);
     waveform.waveColorFill = `rgb(${Math.round(r * 0.45)},${Math.round(g * 0.45)},${Math.round(b * 0.45)})`;
     waveform.markDirty();
+    updateProfileSelect();
   });
 
   $('wave-color-reset-btn').addEventListener('click', () => {
-    const def = '#3d8edd';
+    const p   = _getActiveProfile();
+    const def = p.waveColor;
     waveColorPicker.value = def;
     const r = parseInt(def.slice(1,3),16), g = parseInt(def.slice(3,5),16), b = parseInt(def.slice(5,7),16);
     waveform.waveColorStroke = def;
     waveform.waveColorFill   = `rgb(${Math.round(r*0.45)},${Math.round(g*0.45)},${Math.round(b*0.45)})`;
     waveform.markDirty();
+    updateProfileSelect();
   });
 
   waveOpacitySlider.addEventListener('input', () => {
@@ -760,6 +797,7 @@ document.addEventListener('wheel', function(e) {
     waveform.waveOpacity = v;
     waveOpacityPct.textContent = pct(v);
     waveform.markDirty();
+    updateProfileSelect();
   });
 
   /* ══ Outil pinceau (coloration par mesure) ═══════════════════════════ */
@@ -779,6 +817,8 @@ document.addEventListener('wheel', function(e) {
   const BRUSH_CURSOR_URL = 'data:image/svg+xml;base64,' + btoa(BRUSH_CURSOR_SVG);
 
   function activateBrush() {
+    // Bloqué en mode spectral
+    if (waveform.viewMode === 'spectral') return;
     waveform.paintBrushMode  = true;
     waveform.paintBrushColor = brushColorPicker.value;
     btnBrushToggle.classList.add('active');
@@ -790,6 +830,7 @@ document.addEventListener('wheel', function(e) {
     waveform.paintBrushMode = false;
     waveform._brushPainting = false;
     waveform._brushErasing  = false;
+    waveform.hideBrushCursor();
     btnBrushToggle.classList.remove('active');
     btnToolPan.classList.add('active');
     waveform.waveCanvas.style.cursor = 'crosshair';
@@ -799,6 +840,57 @@ document.addEventListener('wheel', function(e) {
 
   // Radio : cliquer sur pinceau l’active toujours (pas de toggle-off par clic)
   btnBrushToggle.addEventListener('click', () => activateBrush());
+
+  // Après relâchement du clic molette (pan temporaire), restaurer le curseur pinceau si actif
+  waveform.waveCanvas.addEventListener('mouseup', (e) => {
+    if (e.button === 1 && waveform.paintBrushMode) {
+      waveform.waveCanvas.style.cursor = `url("${BRUSH_CURSOR_URL}") 0 24, crosshair`;
+    }
+  });
+
+  // ── Undo / Redo pinceau ─────────────────────────────────────────────────
+  // Capture : measureColors (Map) + brushPalette (tableau d'objets)
+
+  const _brushHistory = [];
+  const _brushFuture  = [];
+  const BRUSH_HISTORY_MAX = 80;
+
+  function _captureBrushState() {
+    return {
+      colors:  new Map(waveform.measureColors),
+      palette: waveform.brushPalette.map(e => ({ ...e })),
+    };
+  }
+
+  function brushPushUndo() {
+    _brushHistory.push(_captureBrushState());
+    if (_brushHistory.length > BRUSH_HISTORY_MAX) _brushHistory.shift();
+    _brushFuture.length = 0;
+  }
+
+  function _brushRestoreState(state) {
+    waveform.measureColors = new Map(state.colors);
+    waveform.brushPalette  = state.palette.map(e => ({ ...e }));
+    renderBrushPalette();
+    waveform.markDirty();
+  }
+
+  function brushUndo() {
+    if (_brushHistory.length === 0) return;
+    _brushFuture.push(_captureBrushState());
+    _brushRestoreState(_brushHistory.pop());
+  }
+
+  function brushRedo() {
+    if (_brushFuture.length === 0) return;
+    _brushHistory.push(_captureBrushState());
+    _brushRestoreState(_brushFuture.pop());
+  }
+
+  // Brancher le callback : snapshot avant chaque trait de pinceau ou effacement
+  waveform.onBrushStrokeStart = () => brushPushUndo();
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   brushColorPicker.addEventListener('input', () => {
     let hex = brushColorPicker.value;
@@ -838,6 +930,7 @@ document.addEventListener('wheel', function(e) {
 
   /** Crée une nouvelle section vide et ouvre l'édition du nom */
   function addSection() {
+    brushPushUndo();  // snapshot avant ajout
     const id    = waveform._paletteIdCounter++;
     const hue   = (waveform.brushPalette.length * 53 + 17) % 360;
     const color = hslToHex(hue, 78, 56);
@@ -900,6 +993,7 @@ document.addEventListener('wheel', function(e) {
         ev.preventDefault();
         row.classList.remove('drag-over');
         if (_paletteDragId === null || _paletteDragId === entry.id) return;
+        brushPushUndo();  // snapshot avant réordonnancement
         const palette = waveform.brushPalette;
         const fromIdx = palette.findIndex(e => e.id === _paletteDragId);
         const toIdx   = palette.findIndex(e => e.id === entry.id);
@@ -955,7 +1049,10 @@ document.addEventListener('wheel', function(e) {
 
         const commit = () => {
           const v = input.value.trim();
-          if (v) entry.name = v;
+          if (v && v !== entry.name) {
+            brushPushUndo();  // snapshot avant renommage
+            entry.name = v;
+          }
           waveform.markDirty();
           renderBrushPalette();
         };
@@ -994,7 +1091,9 @@ document.addEventListener('wheel', function(e) {
       // 'input' = live pendant que l'utilisateur déplace les sliders du picker
       // On met à jour en place SANS reconstruire le DOM (sinon le picker natif se ferme)
       let prevColor = entry.color;
+      let _colorSnapDone = false;  // snapshot pris une seule fois par session picker
       colorInput.addEventListener('input', () => {
+        if (!_colorSnapDone) { brushPushUndo(); _colorSnapDone = true; }  // snapshot avant 1er changement
         const oldColor = prevColor;
         const newColor = colorInput.value;
         entry.color = newColor;
@@ -1020,6 +1119,7 @@ document.addEventListener('wheel', function(e) {
 
       // 'change' = picker fermé → rebuild complet de la palette
       colorInput.addEventListener('change', () => {
+        _colorSnapDone = false;  // réinitialiser pour la prochaine session picker
         renderBrushPalette();
       });
 
@@ -1040,6 +1140,7 @@ document.addEventListener('wheel', function(e) {
       </svg>`;
       delBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
+        brushPushUndo();  // snapshot avant suppression
         const color = entry.color;
         // Retirer l'entrée de la palette
         const idx = waveform.brushPalette.indexOf(entry);
@@ -1097,6 +1198,7 @@ document.addEventListener('wheel', function(e) {
   colorBands.addEventListener('input', () => {
     waveform.loopBandColor = colorBands.value;
     waveform.markDirty();
+    updateProfileSelect();
   });
 
   // Sliders de hauteur des marqueurs
@@ -1118,6 +1220,13 @@ document.addEventListener('wheel', function(e) {
   const bandOpacityPct       = $('band-opacity-pct');
   const markerProfileSelect  = $('marker-profile');
   const btnProfileReset      = $('btn-profile-reset');
+  const btnAddProfile        = $('btn-add-profile');
+  const btnDelProfile        = $('btn-del-profile');
+  const profileSelectWrap    = $('profile-select-wrap');
+  const profileNameWrap      = $('profile-name-wrap');
+  const profileNameInput     = $('profile-name-input');
+  const btnProfileNameOk     = $('btn-profile-name-ok');
+  const btnProfileNameCancel = $('btn-profile-name-cancel');
   const btnResetHeights      = $('btn-reset-heights');
   const btnResetOpacities    = $('btn-reset-opacities');
   const btnResetColors       = $('btn-reset-colors');
@@ -1127,6 +1236,7 @@ document.addEventListener('wheel', function(e) {
     waveform.loopBarHeight  = v;
     loopBarHeightPct.textContent = pct(v);
     waveform.markDirty();
+    updateProfileSelect();
   });
   beatBarHeightSlider.addEventListener('input', () => {
     const v = parseFloat(beatBarHeightSlider.value);
@@ -1134,44 +1244,51 @@ document.addEventListener('wheel', function(e) {
     waveform.beatBarHeight = v / Math.max(0.001, waveform.amplitudeScale * 2.0);
     beatBarHeightPct.textContent = pct(v);
     waveform.markDirty();
+    updateProfileSelect();
   });
   bandHeightSlider.addEventListener('input', () => {
     const v = parseFloat(bandHeightSlider.value);
     waveform.loopBandHeightScale = v;
     bandHeightPct.textContent = pct(v);
     waveform.markDirty();
+    updateProfileSelect();
   });
 
   // Boutons reset couleur
   const COLOR_DEFAULTS = {
-    'color-loop':    { picker: colorLoop,    prop: 'markerColorLoop' },
-    'color-measure': { picker: colorMeasure, prop: 'markerColorMeasure' },
-    'color-beat':    { picker: colorBeat,    prop: 'markerColorBeat' },
-    'color-bands':   { picker: colorBands,   prop: 'loopBandColor' },
+    'color-loop':    { picker: colorLoop,    prop: 'markerColorLoop',    profileKey: 'loopColor'    },
+    'color-measure': { picker: colorMeasure, prop: 'markerColorMeasure', profileKey: 'measureColor' },
+    'color-beat':    { picker: colorBeat,    prop: 'markerColorBeat',    profileKey: 'beatColor'    },
+    'color-bands':   { picker: colorBands,   prop: 'loopBandColor',      profileKey: 'bandsColor'   },
   };
   document.querySelectorAll('.color-reset-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const def    = btn.dataset.default;
       const target = btn.dataset.target;
       const entry  = COLOR_DEFAULTS[target];
       if (!entry) return;
-      entry.picker.value  = def;
-      waveform[entry.prop] = def;
+      const p   = _getActiveProfile();
+      const col = p[entry.profileKey] || btn.dataset.default;
+      entry.picker.value   = col;
+      waveform[entry.prop] = col;
       waveform.markDirty();
+      updateProfileSelect();
     });
   });
 
   colorLoop.addEventListener('input', () => {
     waveform.markerColorLoop = colorLoop.value;
     waveform.markDirty();
+    updateProfileSelect();
   });
   colorMeasure.addEventListener('input', () => {
     waveform.markerColorMeasure = colorMeasure.value;
     waveform.markDirty();
+    updateProfileSelect();
   });
   colorBeat.addEventListener('input', () => {
     waveform.markerColorBeat = colorBeat.value;
     waveform.markDirty();
+    updateProfileSelect();
   });
 
   // Sliders d'opacité des marqueurs
@@ -1179,21 +1296,25 @@ document.addEventListener('wheel', function(e) {
     waveform.loopOpacity = parseFloat(loopOpacitySlider.value);
     loopOpacityPct.textContent = pct(waveform.loopOpacity);
     waveform.markDirty();
+    updateProfileSelect();
   });
   measureOpacitySlider.addEventListener('input', () => {
     waveform.measureOpacity = parseFloat(measureOpacitySlider.value);
     measureOpacityPct.textContent = pct(waveform.measureOpacity);
     waveform.markDirty();
+    updateProfileSelect();
   });
   beatOpacitySlider.addEventListener('input', () => {
     waveform.beatOpacity = parseFloat(beatOpacitySlider.value);
     beatOpacityPct.textContent = pct(waveform.beatOpacity);
     waveform.markDirty();
+    updateProfileSelect();
   });
   bandOpacitySlider.addEventListener('input', () => {
     waveform.bandOpacity = parseFloat(bandOpacitySlider.value);
     bandOpacityPct.textContent = pct(waveform.bandOpacity);
     waveform.markDirty();
+    updateProfileSelect();
   });
 
   /* ══ Pins (marqueurs utilisateur sur la règle) ══════════════════ */
@@ -1260,6 +1381,49 @@ document.addEventListener('wheel', function(e) {
   }
 
   waveform.onPinClick = (idx, sx, sy) => showPinPopup(idx, sx, sy);
+
+  // Transition mode sinusoïdal : sauvegarde/restaure hauteur et opacité des barres de temps
+  let _sineSavedHeight  = null;
+  let _sineSavedOpacity = null;
+  waveform.onSineModeChange = (isSine) => {
+    if (isSine) {
+      _sineSavedHeight  = waveform.beatBarHeight;
+      _sineSavedOpacity = waveform.beatOpacity;
+      // Passer à 60% effectif et opacité 90%
+      waveform.beatBarHeight = 0.60 / Math.max(0.001, waveform.amplitudeScale * 2.0);
+      waveform.beatOpacity   = 0.90;
+      beatBarHeightSlider.value    = 0.60;
+      beatBarHeightPct.textContent = pct(0.60);
+      beatOpacitySlider.value      = 0.90;
+      beatOpacityPct.textContent   = pct(0.90);
+    } else {
+      if (_sineSavedHeight  !== null) waveform.beatBarHeight = _sineSavedHeight;
+      if (_sineSavedOpacity !== null) waveform.beatOpacity   = _sineSavedOpacity;
+      const effH = Math.min(1, waveform.beatBarHeight * waveform.amplitudeScale * 2.0);
+      beatBarHeightSlider.value    = effH;
+      beatBarHeightPct.textContent = pct(effH);
+      beatOpacitySlider.value      = waveform.beatOpacity;
+      beatOpacityPct.textContent   = pct(waveform.beatOpacity);
+      _sineSavedHeight  = null;
+      _sineSavedOpacity = null;
+    }
+    waveform.markDirty();
+  };
+
+  // Bouton "Caler sur la tête de lecture" : pose un pin sur le playhead et le verrouille
+  $('btn-snap-playhead').addEventListener('click', () => {
+    if (!waveform.audioBuffer) return;
+    const t = waveform.playheadTime ?? 0;
+    // Poser le pin
+    const pin = { time: t, color: waveform._randomPinColor() };
+    waveform.pins.push(pin);
+    // Verrouiller immédiatement ce pin
+    _lockedPinIdx = waveform.pins.length - 1;
+    waveform.lockedPinTime = t;
+    offsetGroup.classList.add('locked');
+    _applyLockOffset();
+    waveform.markDirty();
+  });
 
   // Mise à jour du verrou lors d'une suppression par clic droit
   waveform.onPinDelete = (idx) => {
@@ -1508,80 +1672,155 @@ document.addEventListener('wheel', function(e) {
 
   function dblReset(slider, defaultVal, onReset) {
     slider.addEventListener('dblclick', () => {
-      slider.value = defaultVal;
-      onReset(defaultVal);
+      const v = typeof defaultVal === 'function' ? defaultVal() : defaultVal;
+      slider.value = v;
+      onReset(v);
     });
   }
 
-  dblReset(bpmSlider,         120,   v => setBPM(v));
-  dblReset(offsetSlider,        0,   v => setOffset(v));
-  dblReset(volumeSlider,      0.8,   v => { audio.setVolume(v); volumePct.textContent = pct(v); });
-  dblReset(metroVolSlider,    1.0,   v => { metro.volume = v; metroVolPct.textContent = pct(v); });
-  dblReset(amplitudeSlider,        0.5, v => { waveform.amplitudeScale = v; amplitudePct.textContent = pct(v); waveform.markDirty(); });
-  dblReset(measureBarHeightSlider,   0.70, v => { waveform.measureBarHeight    = v; measureBarHeightPct.textContent = pct(v); waveform.markDirty(); });
-  dblReset(loopBarHeightSlider,      1.0,  v => { waveform.loopBarHeight       = v; loopBarHeightPct.textContent    = pct(v); waveform.markDirty(); });
-  dblReset(beatBarHeightSlider,      0.10, v => {
-    // v = valeur effective cible (0.10 = 10%) ; recalcule beatBarHeight
+  dblReset(bpmSlider,              120,  v => setBPM(v));
+  dblReset(offsetSlider,             0,  v => setOffset(v));
+  dblReset(volumeSlider,           0.8,  v => { audio.setVolume(v); syncVolDisplays(v); });
+  dblReset(metroVolSlider,         1.0,  v => { metro.volume = v; metroVolPct.textContent = pct(v); });
+  dblReset(amplitudeSlider,        0.5,  v => { waveform.amplitudeScale = v; amplitudePct.textContent = pct(v); waveform.markDirty(); });
+  dblReset(measureBarHeightSlider, () => _getActiveProfile().measureHeight, v => { waveform.measureBarHeight    = v; measureBarHeightPct.textContent = pct(v); waveform.markDirty(); updateProfileSelect(); });
+  dblReset(loopBarHeightSlider,    () => _getActiveProfile().loopHeight,    v => { waveform.loopBarHeight       = v; loopBarHeightPct.textContent    = pct(v); waveform.markDirty(); updateProfileSelect(); });
+  dblReset(beatBarHeightSlider,    () => _getActiveProfile().beatHeight,    v => {
     waveform.beatBarHeight = v / Math.max(0.001, waveform.amplitudeScale * 2.0);
     beatBarHeightPct.textContent = pct(v);
     waveform.markDirty();
+    updateProfileSelect();
   });
-  dblReset(bandHeightSlider,         1.0,  v => { waveform.loopBandHeightScale = v; bandHeightPct.textContent       = pct(v); waveform.markDirty(); });
-  dblReset(waveOpacitySlider,        1,  v => { waveform.waveOpacity = v; waveOpacityPct.textContent = pct(v); waveform.markDirty(); });
-  dblReset(loopOpacitySlider,        0.90, v => { waveform.loopOpacity    = v; loopOpacityPct.textContent    = pct(v); waveform.markDirty(); });
-  dblReset(measureOpacitySlider,     0.75, v => { waveform.measureOpacity = v; measureOpacityPct.textContent = pct(v); waveform.markDirty(); });
-  dblReset(beatOpacitySlider,        0.55, v => { waveform.beatOpacity    = v; beatOpacityPct.textContent    = pct(v); waveform.markDirty(); });
-  dblReset(bandOpacitySlider,        0.07, v => { waveform.bandOpacity    = v; bandOpacityPct.textContent    = pct(v); waveform.markDirty(); });
+  dblReset(bandHeightSlider,       () => _getActiveProfile().bandsHeight,   v => { waveform.loopBandHeightScale = v; bandHeightPct.textContent       = pct(v); waveform.markDirty(); updateProfileSelect(); });
+  dblReset(waveOpacitySlider,      () => _getActiveProfile().waveOpacity,   v => { waveform.waveOpacity    = v; waveOpacityPct.textContent    = pct(v); waveform.markDirty(); updateProfileSelect(); });
+  dblReset(loopOpacitySlider,      () => _getActiveProfile().loopOpacity,   v => { waveform.loopOpacity    = v; loopOpacityPct.textContent    = pct(v); waveform.markDirty(); updateProfileSelect(); });
+  dblReset(measureOpacitySlider,   () => _getActiveProfile().measureOpacity,v => { waveform.measureOpacity = v; measureOpacityPct.textContent = pct(v); waveform.markDirty(); updateProfileSelect(); });
+  dblReset(beatOpacitySlider,      () => _getActiveProfile().beatOpacity,   v => { waveform.beatOpacity    = v; beatOpacityPct.textContent    = pct(v); waveform.markDirty(); updateProfileSelect(); });
+  dblReset(bandOpacitySlider,      () => _getActiveProfile().bandsOpacity,  v => { waveform.bandOpacity    = v; bandOpacityPct.textContent    = pct(v); waveform.markDirty(); updateProfileSelect(); });
 
-  // Initialiser les labels avec les valeurs par défaut
-  amplitudePct.textContent        = pct(0.5);
-  measureBarHeightPct.textContent = pct(0.70);
-  loopBarHeightPct.textContent    = pct(1.0);
-  beatBarHeightPct.textContent    = pct(0.10);
-  bandHeightPct.textContent       = pct(1.0);
-  loopOpacityPct.textContent      = pct(0.90);
-  measureOpacityPct.textContent   = pct(0.75);
-  beatOpacityPct.textContent      = pct(0.55);
-  bandOpacityPct.textContent      = pct(0.07);
-  volumePct.textContent           = pct(0.8);
-  metroVolPct.textContent         = pct(1.0);
+  // Labels non-profil
+  amplitudePct.textContent = pct(0.5);
+  volumePct.textContent    = pct(0.8);
+  metroVolPct.textContent  = pct(1.0);
 
   /* ══ Profils visuels marqueurs ══════════════════════════════════ */
+
+  // Clés des profils natifs (jamais supprimables, non écrasables)
+  const BUILT_IN_PROFILES = new Set(['defaut', 'nocturne', 'vif', 'pastel', 'mono', 'personnalise']);
+
+  // ── État de gestion des profils ──────────────────────────────────
+  let _applyingProfile = false;   // vrai pendant applyProfile() → bloque updateProfileSelect
+  let _baseProfileKey  = 'defaut'; // dernier profil nommé sélectionné (hors "personnalise")
+
+  // Renvoie le profil actif (profil courant ou, si "personnalise", le dernier profil nommé)
+  function _getActiveProfile() {
+    const pk = markerProfileSelect.value;
+    return MARKER_PROFILES[pk] || MARKER_PROFILES[_baseProfileKey] || MARKER_PROFILES['defaut'];
+  }
+
+  // Lit l'état courant de tous les contrôles de style des marqueurs
+  function _getCurrentMarkerState() {
+    return {
+      loopColor:     colorLoop.value,
+      measureColor:  colorMeasure.value,
+      beatColor:     colorBeat.value,
+      bandsColor:    colorBands.value,
+      waveColor:     waveColorPicker.value,
+      loopHeight:    parseFloat(loopBarHeightSlider.value),
+      measureHeight: parseFloat(measureBarHeightSlider.value),
+      beatHeight:    parseFloat(beatBarHeightSlider.value),
+      bandsHeight:   parseFloat(bandHeightSlider.value),
+      loopOpacity:   parseFloat(loopOpacitySlider.value),
+      measureOpacity:parseFloat(measureOpacitySlider.value),
+      beatOpacity:   parseFloat(beatOpacitySlider.value),
+      bandsOpacity:  parseFloat(bandOpacitySlider.value),
+      waveOpacity:   parseFloat(waveOpacitySlider.value),
+    };
+  }
+
+  // Compare un état courant avec un profil (tolérance sur les flottants)
+  function _profileStrictMatch(state, p) {
+    const EPS = 0.011;
+    const ceq = (a, b) => a.toLowerCase() === b.toLowerCase();
+    return ceq(state.loopColor,    p.loopColor)
+        && ceq(state.measureColor, p.measureColor)
+        && ceq(state.beatColor,    p.beatColor)
+        && ceq(state.bandsColor,   p.bandsColor)
+        && ceq(state.waveColor,    p.waveColor)
+        && Math.abs(state.loopHeight     - p.loopHeight)     < EPS
+        && Math.abs(state.measureHeight  - p.measureHeight)  < EPS
+        && Math.abs(state.beatHeight     - p.beatHeight)     < EPS
+        && Math.abs(state.bandsHeight    - p.bandsHeight)    < EPS
+        && Math.abs(state.loopOpacity    - p.loopOpacity)    < EPS
+        && Math.abs(state.measureOpacity - p.measureOpacity) < EPS
+        && Math.abs(state.beatOpacity    - p.beatOpacity)    < EPS
+        && Math.abs(state.bandsOpacity   - p.bandsOpacity)   < EPS
+        && Math.abs(state.waveOpacity    - p.waveOpacity)    < EPS;
+  }
+
+  // Met à jour visuellement le bouton "+" et le bouton poubelle
+  function _syncAddProfileBtn() {
+    const cur      = markerProfileSelect.value;
+    const isCustom = (cur === 'personnalise');
+    const isUser   = !BUILT_IN_PROFILES.has(cur);  // profil créé par l'utilisateur
+    // "+" : actif seulement en mode Personnalisé
+    btnAddProfile.disabled = !isCustom;
+    btnAddProfile.classList.toggle('active-hint', isCustom);
+    // Poubelle : visible uniquement sur les profils utilisateur
+    btnDelProfile.style.display = isUser ? '' : 'none';
+  }
+
+  // Détecte si l'état courant correspond à un profil connu ; sinon → "Personnalisé"
+  function updateProfileSelect() {
+    if (_applyingProfile) return;
+    const state = _getCurrentMarkerState();
+    for (const [name, p] of Object.entries(MARKER_PROFILES)) {
+      if (name === 'personnalise') continue;
+      if (_profileStrictMatch(state, p)) {
+        markerProfileSelect.value = name;
+        _baseProfileKey = name;
+        _syncAddProfileBtn();
+        return;
+      }
+    }
+    markerProfileSelect.value = 'personnalise';
+    _syncAddProfileBtn();
+  }
 
   const MARKER_PROFILES = {
     defaut: {
       loopColor: '#ff3355', measureColor: '#ff8800', beatColor: '#33dd88',
       bandsColor: '#ffffff', waveColor: '#3d8edd',
-      loopHeight: 1.0, measureHeight: 0.70, beatHeight: 0.10, bandsHeight: 1.0,
-      loopOpacity: 0.90, measureOpacity: 0.75, beatOpacity: 0.55,
+      loopHeight: 1.0, measureHeight: 0.70, beatHeight: 0.05, bandsHeight: 1.0,
+      loopOpacity: 1.0, measureOpacity: 1.0, beatOpacity: 0.60,
       bandsOpacity: 0.07, waveOpacity: 1.0,
     },
     nocturne: {
       loopColor: '#6655ff', measureColor: '#9966cc', beatColor: '#44aacc',
       bandsColor: '#334477', waveColor: '#2255bb',
       loopHeight: 0.80, measureHeight: 0.55, beatHeight: 0.08, bandsHeight: 1.0,
-      loopOpacity: 0.65, measureOpacity: 0.50, beatOpacity: 0.35,
+      loopOpacity: 1.0, measureOpacity: 1.0, beatOpacity: 0.35,
       bandsOpacity: 0.10, waveOpacity: 0.75,
     },
     vif: {
       loopColor: '#ff0066', measureColor: '#ffcc00', beatColor: '#00ffaa',
       bandsColor: '#ff6600', waveColor: '#00ccff',
-      loopHeight: 1.0, measureHeight: 0.85, beatHeight: 0.18, bandsHeight: 1.0,
-      loopOpacity: 1.0, measureOpacity: 0.88, beatOpacity: 0.70,
+      loopHeight: 1.0, measureHeight: 0.85, beatHeight: 0.05, bandsHeight: 1.0,
+      loopOpacity: 1.0, measureOpacity: 1.0, beatOpacity: 0.70,
       bandsOpacity: 0.12, waveOpacity: 1.0,
     },
     pastel: {
       loopColor: '#ffaabb', measureColor: '#ffddaa', beatColor: '#aaffcc',
       bandsColor: '#bbccff', waveColor: '#99bbff',
-      loopHeight: 0.75, measureHeight: 0.55, beatHeight: 0.08, bandsHeight: 1.0,
-      loopOpacity: 0.65, measureOpacity: 0.55, beatOpacity: 0.45,
+      loopHeight: 1.0, measureHeight: 0.70, beatHeight: 0.05, bandsHeight: 1.0,
+      loopOpacity: 1.0, measureOpacity: 1.0, beatOpacity: 0.55,
       bandsOpacity: 0.05, waveOpacity: 0.70,
     },
     mono: {
       loopColor: '#ffffff', measureColor: '#cccccc', beatColor: '#999999',
       bandsColor: '#ffffff', waveColor: '#dddddd',
-      loopHeight: 0.90, measureHeight: 0.60, beatHeight: 0.08, bandsHeight: 1.0,
-      loopOpacity: 0.75, measureOpacity: 0.55, beatOpacity: 0.40,
+      loopHeight: 1.0, measureHeight: 0.60, beatHeight: 0.08, bandsHeight: 1.0,
+      loopOpacity: 1.0, measureOpacity: 1.0, beatOpacity: 0.70,
       bandsOpacity: 0.04, waveOpacity: 0.80,
     },
   };
@@ -1594,6 +1833,8 @@ document.addEventListener('wheel', function(e) {
 
   function applyProfile(name) {
     const p = MARKER_PROFILES[name]; if (!p) return;
+    _applyingProfile = true;
+    if (name !== 'personnalise') _baseProfileKey = name;
     // Couleurs
     colorLoop.value          = p.loopColor;    waveform.markerColorLoop    = p.loopColor;
     colorMeasure.value       = p.measureColor; waveform.markerColorMeasure = p.measureColor;
@@ -1613,51 +1854,209 @@ document.addEventListener('wheel', function(e) {
     beatOpacitySlider.value       = p.beatOpacity;    waveform.beatOpacity    = p.beatOpacity;    beatOpacityPct.textContent    = pct(p.beatOpacity);
     bandOpacitySlider.value       = p.bandsOpacity;   waveform.bandOpacity    = p.bandsOpacity;   bandOpacityPct.textContent    = pct(p.bandsOpacity);
     waveOpacitySlider.value       = p.waveOpacity;    waveform.waveOpacity    = p.waveOpacity;    waveOpacityPct.textContent    = pct(p.waveOpacity);
+    // Si en mode sinus : conserver les overrides 60%/90%, sauvegarder les valeurs du profil
+    if (waveform._isSineMode) {
+      _sineSavedHeight  = p.beatHeight / Math.max(0.001, waveform.amplitudeScale * 2.0);
+      _sineSavedOpacity = p.beatOpacity;
+      waveform.beatBarHeight = 0.60 / Math.max(0.001, waveform.amplitudeScale * 2.0);
+      waveform.beatOpacity   = 0.90;
+      beatBarHeightSlider.value    = 0.60;
+      beatBarHeightPct.textContent = pct(0.60);
+      beatOpacitySlider.value      = 0.90;
+      beatOpacityPct.textContent   = pct(0.90);
+    }
     waveform.markDirty();
+    _applyingProfile = false;
   }
 
-  markerProfileSelect.addEventListener('change', () => applyProfile(markerProfileSelect.value));
-  btnProfileReset.addEventListener('click', () => applyProfile(markerProfileSelect.value));
+  markerProfileSelect.addEventListener('change', () => {
+    const name = markerProfileSelect.value;
+    if (name !== 'personnalise') {
+      _baseProfileKey = name;
+      applyProfile(name);
+    }
+    _syncAddProfileBtn();
+  });
+
+  btnProfileReset.addEventListener('click', () => {
+    // En mode personnalisé, réinitialise vers le dernier profil nommé
+    const key = MARKER_PROFILES[markerProfileSelect.value] ? markerProfileSelect.value : _baseProfileKey;
+    applyProfile(key);
+    markerProfileSelect.value = key;
+    _syncAddProfileBtn();
+  });
+
+  // Appliquer le profil défaut au chargement (sliders + waveform + labels)
+  applyProfile('defaut');
+  _syncAddProfileBtn();
+
+  // ── Input inline : afficher / cacher ───────────────────────────────
+  function _showProfileNameInput() {
+    profileSelectWrap.style.display = 'none';
+    profileNameWrap.style.display   = 'flex';
+    profileNameInput.value = '';
+    profileNameInput.classList.remove('profile-name-error');
+    setTimeout(() => profileNameInput.focus(), 0);
+  }
+
+  function _hideProfileNameInput() {
+    profileNameWrap.style.display   = 'none';
+    profileSelectWrap.style.display = '';
+    profileNameInput.value = '';
+    profileNameInput.classList.remove('profile-name-error');
+  }
+
+  function _flashNameError() {
+    profileNameInput.classList.remove('profile-name-error');
+    void profileNameInput.offsetWidth; // reflow pour relancer l'anim
+    profileNameInput.classList.add('profile-name-error');
+    profileNameInput.addEventListener('animationend', () =>
+      profileNameInput.classList.remove('profile-name-error'), { once: true });
+    profileNameInput.focus();
+    profileNameInput.select();
+  }
+
+  // ── Confirmation du nom ──────────────────────────────────────────
+  function _confirmProfileName() {
+    const name = profileNameInput.value.trim();
+    if (!name) { _flashNameError(); return; }
+
+    // Noms réservés
+    if (BUILT_IN_PROFILES.has(name.toLowerCase())) { _flashNameError(); return; }
+
+    // Profil écrasé ?
+    const alreadyExists = Object.prototype.hasOwnProperty.call(MARKER_PROFILES, name);
+    if (alreadyExists) {
+      const ok = window.confirm(`Le profil « ${name} » existe déjà. Voulez-vous l’écraser ?`);
+      if (!ok) { profileNameInput.focus(); return; }
+    }
+
+    // Snapshot de l'état courant
+    const s = _getCurrentMarkerState();
+    MARKER_PROFILES[name] = {
+      loopColor: s.loopColor, measureColor: s.measureColor, beatColor: s.beatColor,
+      bandsColor: s.bandsColor, waveColor: s.waveColor,
+      loopHeight: s.loopHeight, measureHeight: s.measureHeight, beatHeight: s.beatHeight, bandsHeight: s.bandsHeight,
+      loopOpacity: s.loopOpacity, measureOpacity: s.measureOpacity, beatOpacity: s.beatOpacity, bandsOpacity: s.bandsOpacity,
+      waveOpacity: s.waveOpacity,
+    };
+
+    // DOM : ajouter ou recycler l'option
+    if (!alreadyExists) {
+      const personnaliseOpt = markerProfileSelect.querySelector('option[value="personnalise"]');
+      const opt = document.createElement('option');
+      opt.value = name; opt.textContent = name;
+      markerProfileSelect.insertBefore(opt, personnaliseOpt);
+    }
+
+    _hideProfileNameInput();
+    markerProfileSelect.value = name;
+    _baseProfileKey = name;
+    _syncAddProfileBtn();
+  }
+
+  btnAddProfile.addEventListener('click', () => {
+    if (markerProfileSelect.value !== 'personnalise') return;
+    _showProfileNameInput();
+  });
+
+  btnProfileNameOk.addEventListener('click', _confirmProfileName);
+
+  btnProfileNameCancel.addEventListener('click', _hideProfileNameInput);
+
+  profileNameInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); _confirmProfileName(); }
+    if (e.key === 'Escape') { e.preventDefault(); _hideProfileNameInput(); }
+  });
+
+  // ── Suppression d'un profil utilisateur ────────────────────────────
+  btnDelProfile.addEventListener('click', () => {
+    const name = markerProfileSelect.value;
+    if (BUILT_IN_PROFILES.has(name)) return; // sécurité supplémentaire
+    // Supprimer du registre
+    delete MARKER_PROFILES[name];
+    // Supprimer du DOM
+    const opt = markerProfileSelect.querySelector(`option[value="${CSS.escape(name)}"]`);
+    if (opt) opt.remove();
+    // Repasser en Personnalisé (les valeurs affichées restent intactes)
+    markerProfileSelect.value = 'personnalise';
+    _baseProfileKey = 'defaut';
+    _syncAddProfileBtn();
+  });
 
   btnResetHeights.addEventListener('click', () => {
-    const p = MARKER_PROFILES[markerProfileSelect.value];
-    if (!p) return;
+    const p = _getActiveProfile();
     loopBarHeightSlider.value     = p.loopHeight;    waveform.loopBarHeight       = p.loopHeight;    loopBarHeightPct.textContent    = pct(p.loopHeight);
     measureBarHeightSlider.value  = p.measureHeight; waveform.measureBarHeight    = p.measureHeight; measureBarHeightPct.textContent = pct(p.measureHeight);
     beatBarHeightSlider.value     = p.beatHeight;
     waveform.beatBarHeight = p.beatHeight / Math.max(0.001, waveform.amplitudeScale * 2.0);
     beatBarHeightPct.textContent  = pct(p.beatHeight);
     bandHeightSlider.value        = p.bandsHeight;   waveform.loopBandHeightScale = p.bandsHeight;   bandHeightPct.textContent = pct(p.bandsHeight);
+    // Si en mode sinus : conserver l'override 60%, sauvegarder la valeur du profil
+    if (waveform._isSineMode) {
+      _sineSavedHeight = p.beatHeight / Math.max(0.001, waveform.amplitudeScale * 2.0);
+      waveform.beatBarHeight = 0.60 / Math.max(0.001, waveform.amplitudeScale * 2.0);
+      beatBarHeightSlider.value    = 0.60;
+      beatBarHeightPct.textContent = pct(0.60);
+    }
     waveform.markDirty();
+    updateProfileSelect();
   });
 
   btnResetOpacities.addEventListener('click', () => {
-    const p = MARKER_PROFILES[markerProfileSelect.value];
-    if (!p) return;
+    const p = _getActiveProfile();
     loopOpacitySlider.value    = p.loopOpacity;    waveform.loopOpacity    = p.loopOpacity;    loopOpacityPct.textContent    = pct(p.loopOpacity);
     measureOpacitySlider.value = p.measureOpacity; waveform.measureOpacity = p.measureOpacity; measureOpacityPct.textContent = pct(p.measureOpacity);
     beatOpacitySlider.value    = p.beatOpacity;    waveform.beatOpacity    = p.beatOpacity;    beatOpacityPct.textContent    = pct(p.beatOpacity);
     bandOpacitySlider.value    = p.bandsOpacity;   waveform.bandOpacity    = p.bandsOpacity;   bandOpacityPct.textContent    = pct(p.bandsOpacity);
     waveOpacitySlider.value    = p.waveOpacity;    waveform.waveOpacity    = p.waveOpacity;    waveOpacityPct.textContent    = pct(p.waveOpacity);
+    // Si en mode sinus : conserver l'override 90%, sauvegarder la valeur du profil
+    if (waveform._isSineMode) {
+      _sineSavedOpacity = p.beatOpacity;
+      waveform.beatOpacity = 0.90;
+      beatOpacitySlider.value    = 0.90;
+      beatOpacityPct.textContent = pct(0.90);
+    }
     waveform.markDirty();
+    updateProfileSelect();
   });
 
   btnResetColors.addEventListener('click', () => {
-    const p = MARKER_PROFILES[markerProfileSelect.value];
-    if (!p) return;
+    const p = _getActiveProfile();
     colorLoop.value    = p.loopColor;    waveform.markerColorLoop    = p.loopColor;
     colorMeasure.value = p.measureColor; waveform.markerColorMeasure = p.measureColor;
     colorBeat.value    = p.beatColor;    waveform.markerColorBeat    = p.beatColor;
     colorBands.value   = p.bandsColor;   waveform.loopBandColor      = p.bandsColor;
     waveColorPicker.value = p.waveColor; _applyHexToWave(p.waveColor);
     waveform.markDirty();
+    updateProfileSelect();
   });
 
   /* ══ Clavier ═════════════════════════════════════════════════════ */
 
+  // Ctrl+Z / Ctrl+Y en phase de CAPTURE pour court-circuiter le undo natif du navigateur
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    const key = e.key.toLowerCase();
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (!ctrl) return;
+    if (key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      brushUndo();
+    } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      brushRedo();
+    }
+  }, true);  // ← phase de capture
+
   document.addEventListener('keydown', e => {
     // Ignorer si focus sur un input
     if (e.target.tagName === 'INPUT') return;
+
+    // Ctrl+Z / Ctrl+Y — gérés par le listener capture ci-dessus, ignorer ici
+    if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyZ' || e.code === 'KeyY')) return;
 
     switch (e.code) {
       case 'Space':
@@ -1879,14 +2278,12 @@ document.addEventListener('wheel', function(e) {
       const v = parseFloat(volPanSlider.value);
       audio.setVolume(v);
       volumeSlider.value         = v;
-      volumePct.textContent      = pct(v);
-      volPanPct.textContent      = pct(v);
+      syncVolDisplays(v);
     });
     dblReset(volPanSlider, 0.8, v => {
       audio.setVolume(v);
       volumeSlider.value    = v;
-      volumePct.textContent = pct(v);
-      volPanPct.textContent = pct(v);
+      syncVolDisplays(v);
     });
 
     // — Canvas resize via ResizeObserver ——————————————————
@@ -1942,8 +2339,9 @@ document.addEventListener('wheel', function(e) {
       else if (ts - pkRt > HOLD_MS) pkR = Math.max(0, pkR - FALL_SPD * (ts - pkRt - HOLD_MS));
 
       // Layout
+      const DB_H    = 16;  // zone texte dB en haut
       const LABEL_H = 11;
-      const barH    = H - LABEL_H - 2;
+      const barH    = H - DB_H - LABEL_H - 2;
       const gap     = 3;
       const barW    = Math.max(2, Math.floor((W - gap * 3) / 2));
 
@@ -1962,37 +2360,49 @@ document.addEventListener('wheel', function(e) {
       function drawBar(x, level, peak) {
         // Track sombre
         ctx.fillStyle = '#151515';
-        ctx.fillRect(x, LABEL_H, barW, barH);
+        ctx.fillRect(x, DB_H, barW, barH);
 
         // Barre de niveau
         const fillH = Math.max(0, Math.round(barH * level));
         if (fillH > 0) {
           ctx.save();
           ctx.beginPath();
-          ctx.rect(x, LABEL_H + barH - fillH, barW, fillH);
+          ctx.rect(x, DB_H + barH - fillH, barW, fillH);
           ctx.clip();
           ctx.fillStyle = grad;
-          ctx.fillRect(x, LABEL_H, barW, barH);
+          ctx.fillRect(x, DB_H, barW, barH);
           ctx.restore();
         }
 
         // Segments (grille discrète visuelle)
         const SEG = 3; // px par segment
         ctx.fillStyle = '#080808';
-        for (let y = LABEL_H + SEG; y < LABEL_H + barH; y += SEG + 1)
+        for (let y = DB_H + SEG; y < DB_H + barH; y += SEG + 1)
           ctx.fillRect(x, y, barW, 1);
 
         // Ligne peak hold
         if (peak > 0.01) {
-          const py = LABEL_H + barH - Math.round(barH * peak);
+          const py = DB_H + barH - Math.round(barH * peak);
           ctx.fillStyle = peak > 0.82 ? '#ff4444' :
                           peak > 0.60 ? '#ffdd00' : '#55ee55';
-          ctx.fillRect(x, Math.max(LABEL_H, py - 1), barW, 2);
+          ctx.fillRect(x, Math.max(DB_H, py - 1), barW, 2);
         }
       }
 
       drawBar(gap,             lvlL, pkL);
       drawBar(gap * 2 + barW, lvlR, pkR);
+
+      // Niveau en temps réel (zone DB_H en haut) — 0 = silence, 100 = plein
+      const peakNorm = Math.max(lvlL, lvlR);
+      if (peakNorm > 0.001) {
+        const lvlVal  = Math.round(peakNorm * 100);
+        const dbColor = peakNorm > 0.82 ? '#ff4444' : peakNorm > 0.60 ? '#ffdd00' : '#55ee55';
+        ctx.fillStyle    = dbColor;
+        ctx.font         = 'bold 8px monospace';
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(lvlVal, W / 2, DB_H / 2);
+      }
 
       // Labels L / R
       ctx.fillStyle    = '#444';

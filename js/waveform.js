@@ -18,6 +18,14 @@ class WaveformRenderer {
     this._peaksMin    = null;   // Float32Array
     this._peaksMax    = null;   // Float32Array
     this._peakCount   = 0;
+    this._rawSamples  = null;   // Float32Array mono mixdown
+    this._sampleRate  = 44100;
+
+    // Mode de visualisation : 'classic' | 'spectral'
+    this.viewMode  = 'classic';
+    this._specBass    = null;   // Float32Array RMS basses par chunk
+    this._specMid     = null;   // Float32Array RMS médiums par chunk
+    this._specHigh    = null;   // Float32Array RMS aigus par chunk
 
     // Vue : zoom et scroll
     this.zoom        = 1.0;    // 1 = tout affiché, >1 = zoomé
@@ -29,9 +37,11 @@ class WaveformRenderer {
     this.autoFollow    = true;   // auto-scroll actif par défaut
 
     // Callbacks
-    this.onSeek        = null;  // fn(time)
-    this.onPinClick    = null;  // fn(pinIndex, screenX, screenY)
-    this.onPinDragMove = null;  // fn(pinIndex)  — appelé pendant le drag
+    this.onSeek           = null;  // fn(time)
+    this.onPinClick       = null;  // fn(pinIndex, screenX, screenY)
+    this.onPinDragMove    = null;  // fn(pinIndex)  — appelé pendant le drag
+    this.onSineModeChange = null;  // fn(isSine) — transition entrée/sortie mode sinusoïdal
+    this._isSineMode      = false; // état courant
 
     // Marqueurs utilisateur (pins)
     this.pins          = [];    // [{time, color}]
@@ -70,13 +80,29 @@ class WaveformRenderer {
     ];
 
     // Drag pan
-    this._drag = { active: false, startX: 0, startScroll: 0, moved: false };
+    this._drag    = { active: false, startX: 0, startScroll: 0, moved: false };
+    this._midDrag = { active: false, startX: 0, startScroll: 0 };  // pan clic molette
+
+    // Callback pinceau — app.js peut brancher le système undo/redo ici
+    this.onBrushStrokeStart = null;
 
     // Mode pinceau
     this.paintBrushMode    = false;   // activé depuis app.js
     this.paintBrushColor   = '#ff8800';
     this._brushPainting    = false;
     this._brushErasing     = false;
+    this._lastBrushX       = null;   // interpolation entre events mousemove
+
+    // Curseur pinceau : div absolu mis à jour directement dans mousemove (pas de rAF = zéro latence)
+    this._brushCursorEl = document.createElement('div');
+    Object.assign(this._brushCursorEl.style, {
+      position: 'absolute', top: '0', left: '-9999px',
+      width: '2px', height: '0',
+      pointerEvents: 'none', display: 'none',
+      opacity: '0.75',
+      willChange: 'left',
+    });
+    waveCanvas.parentElement.appendChild(this._brushCursorEl);
 
     // Palette de sections [{id, color, name}]
     this.brushPalette      = [];
@@ -85,7 +111,7 @@ class WaveformRenderer {
 
     // Bandes de groupes de boucles
     this.loopsPerGroup  = 4;
-    this.showLoopBands  = true;
+    this.showLoopBands  = false;
     this.loopBandColor  = '#ffffff';
 
     // Amplitude (zoom vertical)
@@ -106,7 +132,8 @@ class WaveformRenderer {
 
     // Outil pinceau : couleurs par index de mesure
     // Map<measureIdx: int, color: string>
-    this.measureColors   = new Map();
+    this.measureColors     = new Map();
+    // Ordre de rendu : boucle+mesure+bandes toujours SOUS la waveform, tempo toujours PAR-DESSUS
 
     // Visibilité des marqueurs de beats
     this.showLoopMarkers    = true;
@@ -123,11 +150,35 @@ class WaveformRenderer {
 
     // Hauteurs relatives des marqueurs (0 → 1 = 0% → 100% du canvas)
     this.loopBarHeight       = 1.0;  // boucle  : pleine hauteur
-    this.beatBarHeight       = 0.10; // temps   : fraction de H (synchro amplitude)
+    this.beatBarHeight       = 0.05; // temps   : fraction de H (synchro amplitude)
     this.loopBandHeightScale = 1.0;  // bandes  : pleine hauteur
 
     this._animFrame = null;
     this._dirty     = true;
+
+    // ResizeObserver : resize canvas uniquement quand le conteneur change vraiment
+    // (évite le layout reflow à chaque frame de la boucle rAF)
+    const ro = new ResizeObserver(() => {
+      const dpr = window.devicePixelRatio || 1;
+      const W  = this.waveCanvas.clientWidth;
+      const H  = this.waveCanvas.clientHeight;
+      const rH = this.rulerCanvas.clientHeight;
+      if (this.waveCanvas.width !== Math.round(W * dpr) || this.waveCanvas.height !== Math.round(H * dpr)) {
+        this.waveCanvas.width  = Math.round(W * dpr);
+        this.waveCanvas.height = Math.round(H * dpr);
+        this.wctx.scale(dpr, dpr);
+        this._brushCursorEl.style.height = H + 'px';
+        if (this.audioBuffer) this._computePeaks();
+      }
+      if (this.rulerCanvas.width !== Math.round(W * dpr) || this.rulerCanvas.height !== Math.round(rH * dpr)) {
+        this.rulerCanvas.width  = Math.round(W * dpr);
+        this.rulerCanvas.height = Math.round(rH * dpr);
+        this.rctx.scale(dpr, dpr);
+      }
+      this._dirty = true;
+    });
+    ro.observe(this.waveCanvas);
+    ro.observe(this.rulerCanvas);
 
     this._setupListeners();
     this._startRenderLoop();
@@ -140,7 +191,22 @@ class WaveformRenderer {
     this.duration    = audioBuffer.duration;
     this.zoom        = 1;
     this.scrollTime  = 0;
+    this._sampleRate = audioBuffer.sampleRate;
+    // Stocker un mono mixdown brut pour la vue sinusoïdale
+    const numCh = audioBuffer.numberOfChannels;
+    const len   = audioBuffer.length;
+    this._rawSamples = new Float32Array(len);
+    if (numCh === 1) {
+      this._rawSamples.set(audioBuffer.getChannelData(0));
+    } else {
+      const invCh = 1 / numCh;
+      for (let c = 0; c < numCh; c++) {
+        const ch = audioBuffer.getChannelData(c);
+        for (let i = 0; i < len; i++) this._rawSamples[i] += ch[i] * invCh;
+      }
+    }
     this._computePeaks();
+    this._computeSpectral();
     this._dirty = true;
   }
 
@@ -182,6 +248,155 @@ class WaveformRenderer {
     this._peakCount = count;
   }
 
+  /**
+   * Pré-calcule l'énergie spectrale par chunk (basses / médiums / aigus)
+   * via filtres IIR passe-bas causal — O(N), aucune allocation large.
+   * Bass  : 0 – 200 Hz
+   * Mid   : 200 – 4000 Hz
+   * High  : 4000 Hz+
+   */
+  _computeSpectral() {
+    const sr  = this._sampleRate;
+    const buf = this._rawSamples;
+    if (!buf) return;
+    const N   = buf.length;
+    const count = this._peakCount;
+    const step  = Math.max(1, Math.floor(N / count));
+
+    // Coefficients IIR premier ordre
+    const aB = 1 - Math.exp(-2 * Math.PI * 200  / sr);  // coupe-bas 200 Hz
+    const aH = 1 - Math.exp(-2 * Math.PI * 4000 / sr);  // coupe-bas 4000 Hz
+
+    this._specBass = new Float32Array(count);
+    this._specMid  = new Float32Array(count);
+    this._specHigh = new Float32Array(count);
+
+    let yb = 0, yh = 0;  // états des filtres (continus entre chunks)
+
+    for (let ci = 0; ci < count; ci++) {
+      const start = ci * step;
+      const end   = Math.min(start + step, N);
+      let sb = 0, sm = 0, sh = 0;
+      for (let i = start; i < end; i++) {
+        const x = buf[i];
+        yb += aB * (x - yb);   // passe-bas → basses
+        yh += aH * (x - yh);   // passe-bas → basses + médiums
+        const b = yb;           // basses
+        const m = yh - yb;      // médiums (différence)
+        const h = x - yh;       // aigus
+        sb += b * b;
+        sm += m * m;
+        sh += h * h;
+      }
+      const n = end - start;
+      this._specBass[ci] = Math.sqrt(sb / n);
+      this._specMid[ci]  = Math.sqrt(sm / n);
+      this._specHigh[ci] = Math.sqrt(sh / n);
+    }
+  }
+
+
+
+  /**
+   * Visualisation spectrale style Rekordbox — O(W) par frame via ImageData.
+   * Basses = bleu, Médiums = orange, Aigus = blanc.
+   * Chaque colonne de pixel est colorée selon la dominante fréquentielle.
+   */
+  /**
+   * Visualisation spectrale style Rekordbox — bandes EMPILÉES.
+   * Du centre vers l'extérieur :
+   *   ① Aigus  (blanc)  — innermost, au centre
+   *   ② Médiums (orange) — milieu
+   *   ③ Basses  (bleu)  — outermost, aux bords
+   * Symétrique haut/bas. O(W×H) via ImageData.
+   */
+  _drawSpectral(ctx, W, H) {
+    const pps      = this.pixelsPerSecond;   // CSS px / s
+    const startSec = this.scrollTime;
+    const peakStep = this.duration / this._peakCount;
+    const alpha255 = Math.round(this.waveOpacity * 255);
+
+    // createImageData / putImageData opèrent en PIXELS PHYSIQUES (bypass du transform dpr).
+    // On doit donc travailler dans l'espace device-pixel.
+    const dpr  = this._dpr();
+    const cW   = ctx.canvas.width;   // pixels physiques
+    const cH   = ctx.canvas.height;  // pixels physiques
+    const midY = cH / 2;             // centre en pixels physiques
+    const hH   = (midY - 2 * dpr) * this.amplitudeScale * 1.8;
+
+    const imageData = ctx.createImageData(cW, cH);
+    const data      = imageData.data;
+
+    // Couleurs des 3 bandes
+    const BASS  = [20,  100, 230];   // bleu profond
+    const MID   = [220, 140,  30];   // orange chaud
+    const HIGH  = [200, 215, 255];   // blanc bleuté
+
+    // Boucle sur les colonnes physiques
+    for (let cpx = 0; cpx < cW; cpx++) {
+      // Convertir colonne physique → temps (via CSS px)
+      const t = startSec + (cpx / dpr) / pps;
+      if (t < 0 || t > this.duration) continue;
+
+      const pi = Math.min(this._peakCount - 1, Math.max(0, Math.floor(t / peakStep)));
+
+      // Hauteur totale en pixels physiques
+      const ampMax = Math.min(1,  this._peaksMax[pi]);
+      const ampMin = Math.max(-1, this._peaksMin[pi]);
+      const amp    = (ampMax - ampMin) * 0.5;
+      const barH   = Math.max(1, amp * hH);
+
+      // Proportions spectrales (somme = 1)
+      const bass  = this._specBass[pi];
+      const mid   = this._specMid[pi];
+      const high  = this._specHigh[pi];
+      const total = bass + mid + high + 1e-9;
+
+      const highH = barH * (high / total);
+      const midH  = barH * (mid  / total);
+
+      const yTop    = Math.max(0,      Math.floor(midY - barH));
+      const yBottom = Math.min(cH - 1, Math.ceil (midY + barH));
+
+      for (let py = yTop; py <= yBottom; py++) {
+        const dist = Math.abs(py - midY);
+
+        let r, g, b;
+        if (dist <= highH) {
+          const t2 = dist / (highH + 0.5);
+          const bright = 0.55 + 0.45 * t2;
+          r = Math.round(HIGH[0] * bright);
+          g = Math.round(HIGH[1] * bright);
+          b = Math.round(HIGH[2] * bright);
+        } else if (dist <= highH + midH) {
+          const t2 = (dist - highH) / (midH + 0.5);
+          const bright = 0.45 + 0.55 * t2;
+          r = Math.round(MID[0] * bright);
+          g = Math.round(MID[1] * bright);
+          b = Math.round(MID[2] * bright);
+        } else {
+          const t2 = (dist - highH - midH) / (barH - highH - midH + 0.5);
+          const bright = 0.30 + 0.70 * t2;
+          r = Math.round(BASS[0] * bright);
+          g = Math.round(BASS[1] * bright);
+          b = Math.round(BASS[2] * bright);
+        }
+
+        const idx = (py * cW + cpx) * 4;
+        data[idx]     = r;
+        data[idx + 1] = g;
+        data[idx + 2] = b;
+        data[idx + 3] = alpha255;
+      }
+    }
+
+    // putImageData ignore le transform — on reset temporairement pour placer à (0,0) physique
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.putImageData(imageData, 0, 0);
+    ctx.restore();
+  }
+
   /* ── Vue ────────────────────────────────────────── */
 
   get visibleDuration() {
@@ -207,18 +422,22 @@ class WaveformRenderer {
   }
 
   zoomIn(factor = 2, pivotTime = null) {
-    if (pivotTime === null) pivotTime = this.scrollTime + this.visibleDuration / 2;
+    const visBefore = this.visibleDuration;
+    if (pivotTime === null) pivotTime = this.scrollTime + visBefore / 2;
+    // Ratio de position du pivot dans la fenêtre visible (conservé après zoom)
+    const ratio = (pivotTime - this.scrollTime) / visBefore;
     this.zoom = Math.min(2000, this.zoom * factor);
-    // Garder pivotTime au même x
-    this.scrollTime = pivotTime - this.visibleDuration / 2;
+    this.scrollTime = pivotTime - ratio * this.visibleDuration;
     this._clampScroll();
     this._dirty = true;
   }
 
   zoomOut(factor = 2, pivotTime = null) {
-    if (pivotTime === null) pivotTime = this.scrollTime + this.visibleDuration / 2;
+    const visBefore = this.visibleDuration;
+    if (pivotTime === null) pivotTime = this.scrollTime + visBefore / 2;
+    const ratio = (pivotTime - this.scrollTime) / visBefore;
     this.zoom = Math.max(0.1, this.zoom / factor);
-    this.scrollTime = pivotTime - this.visibleDuration / 2;
+    this.scrollTime = pivotTime - ratio * this.visibleDuration;
     this._clampScroll();
     this._dirty = true;
   }
@@ -270,6 +489,8 @@ class WaveformRenderer {
       // Recalc peaks si audio chargé
       if (this.audioBuffer) this._computePeaks();
     }
+    // Mettre à jour la hauteur du curseur pinceau
+    this._brushCursorEl.style.height = H + 'px';
 
     if (this.rulerCanvas.width !== W * dpr || this.rulerCanvas.height !== rH * dpr) {
       this.rulerCanvas.width  = W * dpr;
@@ -282,9 +503,7 @@ class WaveformRenderer {
   _startRenderLoop() {
     const ANIM_SPEED = 0.10; // pas par frame (~6 frames pour 60fps)
     const loop = () => {
-      this._syncSize();
-
-      // Avancer l'animation du losange
+      // Animation du losange (dirty seulement pendant la transition)
       const target = this._markerHovered ? 1 : 0;
       if (this._markerAnim !== target) {
         const dir   = target > this._markerAnim ? 1 : -1;
@@ -292,13 +511,10 @@ class WaveformRenderer {
         this._dirty = true;
       }
 
-      // Avancer la pulsation du pin verrouillé
-      if (this.lockedPinTime !== null) {
-        this._lockPulse = (this._lockPulse + 2.5) % 360;
-        this._dirty = true;
-      }
+      // Pulsation du pin verrouillé : time-based via performance.now() — pas de dirty forcé
+      const needLockAnim = this.lockedPinTime !== null;
 
-      if (this._dirty || this.isPlaying || this._pinDrag.active) {
+      if (this._dirty || this.isPlaying || this._pinDrag.active || needLockAnim) {
         this._draw();
         this._dirty = false;
       }
@@ -325,14 +541,35 @@ class WaveformRenderer {
 
     if (!this.audioBuffer) return;
 
-    // ── Bandes de 4 mesures alternées ──
-    this._drawMeasureGroupBands(ctx, W, H);
+    // En mode spectral, les marqueurs sont tous dessinés PAR-DESSUS (le spectre est opaque)
+    const isSpectral = this.viewMode === 'spectral' && !!this._specBass;
+
+    // Détection mode sinusoïdal + callback de transition
+    const _spx       = W / this.visibleDuration;
+    const isSineNow  = !isSpectral && !!this._rawSamples && (this._sampleRate / _spx) < 150;
+    if (isSineNow !== this._isSineMode) {
+      this._isSineMode = isSineNow;
+      if (this.onSineModeChange) this.onSineModeChange(isSineNow);
+    }
+
+    // ── Passe SOUS la waveform ──
+    if (!isSpectral) {
+      if (isSineNow) {
+        // Mode sinus : vert en premier (sous orange/rouge), puis orange/rouge par-dessus vert
+        this._drawMeasureGroupBands(ctx, W, H, true);
+        this._drawBeatMarkers(ctx, W, H, false); // vert en dessous
+        this._drawBeatMarkers(ctx, W, H, true);  // orange/rouge par-dessus vert
+      } else {
+        // Mode normal : orange/rouge sous la waveform
+        this._drawMeasureGroupBands(ctx, W, H, true);
+        this._drawBeatMarkers(ctx, W, H, true);
+      }
+    }
 
     // ── Waveform ──
     this._drawWaveShape(ctx, W, H);
 
-    // Ligne centrale horizontale — axe du waveform sur toute la durée du morceau
-    // Dessinée après le waveform pour rester visible par-dessus le remplissage
+    // Ligne centrale horizontale
     ctx.save();
     if (this.audioBuffer) {
       const xStart = this.timeToX(0);
@@ -347,8 +584,17 @@ class WaveformRenderer {
     }
     ctx.restore();
 
-    // ── Marqueurs de beats ──
-    this._drawBeatMarkers(ctx, W, H);
+    // ── Passe PAR-DESSUS ──
+    // En spectral : bandes + barres boucle/mesure visibles par-dessus le spectre
+    if (isSpectral) {
+      this._drawMeasureGroupBands(ctx, W, H, true);
+      this._drawBeatMarkers(ctx, W, H, true);
+    }
+    // Mode normal : vert par-dessus la waveform. Mode sinus : déjà dessiné sous la wave.
+    if (!isSineNow) {
+      this._drawBeatMarkers(ctx, W, H, false);
+    }
+    this._drawMeasureGroupBands(ctx, W, H, false);
 
     // ── Début / fin du morceau ──
     this._drawBoundaryMarkers(ctx, W, H);
@@ -361,6 +607,11 @@ class WaveformRenderer {
 
     // ── Playhead ──
     this._drawPlayhead(ctx, W, H);
+
+  }
+
+  hideBrushCursor() {
+    this._brushCursorEl.style.display = 'none';
   }
 
   _drawPinLinesOnWave(ctx, W, H) {
@@ -403,10 +654,18 @@ class WaveformRenderer {
     if (!this._peaksMax) return;
     if (!this.showWaveform) return;
 
-    // ── Couche de base : couleur par défaut ──
+    // ── Dispatch selon viewMode ──
+    switch (this.viewMode) {
+      case 'spectral':
+        if (this._specBass) { this._drawSpectral(ctx, W, H); return; }
+        break;
+
+    }
+
+    // ── Couche de base : couleur par défaut (classic) ──
     this._drawWaveShapeColored(ctx, W, H, this.waveColorFill, this.waveColorStroke, null, null);
 
-    // ── Couche pinceau : surcharge par mesure ──
+    // ── Couche pinceau : segments colorés — O(largeur segment) au lieu de O(W×N) ──
     if (this.measureColors.size > 0) {
       const visibleMeasures = this._getVisibleMeasureRanges(W);
       for (const { measureIdx, xStart, xEnd } of visibleMeasures) {
@@ -416,19 +675,14 @@ class WaveformRenderer {
         const g = parseInt(color.slice(3, 5), 16);
         const b = parseInt(color.slice(5, 7), 16);
         const fill = `rgb(${Math.round(r * 0.45)},${Math.round(g * 0.45)},${Math.round(b * 0.45)})`;
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(xStart, 0, xEnd - xStart, H);
-        ctx.clip();
-        this._drawWaveShapeColored(ctx, W, H, fill, color, null, null);
-        ctx.restore();
+        this._drawWaveShapeColored(ctx, W, H, fill, color, xStart, xEnd);
       }
     }
   }
 
   /**
    * Dessine la forme d'onde avec les couleurs données.
-   * Si clipX0/clipX1 sont fournis, seule cette tranche est dessinée.
+   * clipX0/clipX1 (optionnel) : restreint le rendu à cette tranche de pixels — O(segment) au lieu de O(W).
    */
   _drawWaveShapeColored(ctx, W, H, fillColor, strokeColor, clipX0, clipX1) {
     const visD     = this.visibleDuration;
@@ -436,6 +690,26 @@ class WaveformRenderer {
     const midY     = H / 2;
     const hH       = (midY - 4) * this.amplitudeScale;
     const startSec = this.scrollTime;
+
+    // ── Mode sinusoïdal ──
+    const samplesPerPixel = this._sampleRate / pps;
+    if (this._rawSamples && samplesPerPixel < 150) {
+      if (clipX0 !== null) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(clipX0, 0, clipX1 - clipX0, H);
+        ctx.clip();
+        this._drawWaveSine(ctx, W, H, midY, hH, pps, startSec, fillColor, strokeColor);
+        ctx.restore();
+      } else {
+        this._drawWaveSine(ctx, W, H, midY, hH, pps, startSec, fillColor, strokeColor);
+      }
+      return;
+    }
+
+    // ── Mode peaks : itérer uniquement les pixels de la tranche ──
+    const pxStart  = clipX0 !== null ? Math.max(0, Math.floor(clipX0)) : 0;
+    const pxEnd    = clipX1 !== null ? Math.min(W, Math.ceil(clipX1))  : W;
     const peakStep = this.duration / this._peakCount;
 
     ctx.globalAlpha = this.waveOpacity;
@@ -443,40 +717,93 @@ class WaveformRenderer {
     ctx.strokeStyle = strokeColor;
     ctx.lineWidth   = 1;
 
+    // Bord supérieur pxStart → pxEnd
     ctx.beginPath();
-    let first = true;
-
-    for (let px = 0; px < W; px++) {
-      const t = startSec + px / pps;
-      if (t < 0 || t > this.duration) {
-        const y = midY;
-        if (first) { ctx.moveTo(px, y); first = false; }
-        else        ctx.lineTo(px, y);
-        continue;
-      }
-      const pi    = Math.min(this._peakCount - 1, Math.max(0, Math.floor(t / peakStep)));
-      const piEnd = Math.min(this._peakCount - 1, Math.ceil((t + 1 / pps) / peakStep));
-      let mx = this._peaksMax[pi];
-      for (let k = pi; k <= piEnd; k++) if (this._peaksMax[k] > mx) mx = this._peaksMax[k];
-      const y = midY - Math.min(mx * hH, midY);
-      if (first) { ctx.moveTo(px, y); first = false; }
-      else        ctx.lineTo(px, y);
-    }
-
-    for (let px = W - 1; px >= 0; px--) {
+    ctx.moveTo(pxStart, midY);
+    for (let px = pxStart; px < pxEnd; px++) {
       const t = startSec + px / pps;
       if (t < 0 || t > this.duration) { ctx.lineTo(px, midY); continue; }
-      const pi    = Math.min(this._peakCount - 1, Math.max(0, Math.floor(t / peakStep)));
-      const piEnd = Math.min(this._peakCount - 1, Math.ceil((t + 1 / pps) / peakStep));
-      let mn = this._peaksMin[pi];
-      for (let k = pi; k <= piEnd; k++) if (this._peaksMin[k] < mn) mn = this._peaksMin[k];
-      const y = midY - Math.max(mn * hH, -midY);
-      ctx.lineTo(px, y);
+      const pi = Math.min(this._peakCount - 1, Math.max(0, Math.floor(t / peakStep)));
+      ctx.lineTo(px, midY - Math.min(this._peaksMax[pi] * hH, midY));
     }
-
+    // Bord inférieur pxEnd → pxStart
+    for (let px = pxEnd - 1; px >= pxStart; px--) {
+      const t = startSec + px / pps;
+      if (t < 0 || t > this.duration) { ctx.lineTo(px, midY); continue; }
+      const pi = Math.min(this._peakCount - 1, Math.max(0, Math.floor(t / peakStep)));
+      ctx.lineTo(px, midY - Math.max(this._peaksMin[pi] * hH, -midY));
+    }
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * Vue sinusoïdale — O(W) : on itère par PIXEL, pas par sample.
+   * Interpolation linéaire pour obtenir la valeur exacte à chaque pixel.
+   * Jamais plus de ~1200 itérations quelle que soit la résolution audio.
+   */
+  _drawWaveSine(ctx, W, H, midY, hH, pps, startSec, fillColor, strokeColor) {
+    const sr      = this._sampleRate;
+    const samples = this._rawSamples;
+    const len     = samples.length;
+    const spp     = sr / pps;   // samples par pixel
+
+    // Interpolation linéaire entre deux samples
+    const lerp = (t) => {
+      const fi = t * sr;
+      const i0 = Math.floor(fi);
+      if (i0 < 0)       return 0;
+      if (i0 >= len)    return 0;
+      const frac = fi - i0;
+      const s1   = i0 + 1 < len ? samples[i0 + 1] : samples[i0];
+      return samples[i0] + frac * (s1 - samples[i0]);
+    };
+
+    // Construire les Y pour chaque pixel en un seul passage O(W)
+    const ys = new Float32Array(W);
+    for (let px = 0; px < W; px++) {
+      const t = startSec + px / pps;
+      if (t < 0 || t > this.duration) { ys[px] = midY; continue; }
+      const v = Math.max(-1, Math.min(1, lerp(t)));
+      ys[px] = midY - v * hH;
+    }
+
+    ctx.globalAlpha = this.waveOpacity;
+    ctx.fillStyle   = fillColor;
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth   = 1.5;
+
+    // ── Fill : zone entre la courbe et l'axe ──
+    ctx.beginPath();
+    ctx.moveTo(0, midY);
+    for (let px = 0; px < W; px++) ctx.lineTo(px, ys[px]);
+    ctx.lineTo(W - 1, midY);
+    ctx.closePath();
+    ctx.fill();
+
+    // ── Stroke : courbe lisse ──
+    ctx.beginPath();
+    ctx.moveTo(0, ys[0]);
+    for (let px = 1; px < W; px++) ctx.lineTo(px, ys[px]);
+    ctx.stroke();
+
+    // ── Points aux samples quand très zoomé (< 0.5 samples/pixel) ──
+    if (spp < 0.5) {
+      const iStart = Math.max(0,       Math.floor(startSec * sr));
+      const iEnd   = Math.min(len - 1, Math.ceil((startSec + W / pps) * sr));
+      ctx.fillStyle = strokeColor;
+      for (let i = iStart; i <= iEnd; i++) {
+        const x = (i / sr - startSec) * pps;
+        if (x < -4 || x > W + 4) continue;
+        const y = midY - Math.max(-1, Math.min(1, samples[i])) * hH;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
     ctx.globalAlpha = 1;
   }
 
@@ -526,9 +853,10 @@ class WaveformRenderer {
     return result;
   }
 
-  _drawMeasureGroupBands(ctx, W, H) {
+  _drawMeasureGroupBands(ctx, W, H, underPass) {
     if (!this.metronome || !this.audioBuffer) return;
     if (!this.showLoopBands) return;
+    if (!underPass) return;   // bandes toujours sous la waveform (hardcoded)
 
     const bpm             = this.metronome.bpm;
     const beatsPerMeasure = this.metronome.beatsPerMeasure;
@@ -568,7 +896,7 @@ class WaveformRenderer {
     ctx.globalAlpha = 1;
   }
 
-  _drawBeatMarkers(ctx, W, H) {
+  _drawBeatMarkers(ctx, W, H, underPass) {
     if (!this.audioBuffer) return;
     if (!this.showLoopMarkers && !this.showMeasureMarkers && !this.showBeatMarkers) return;
 
@@ -577,61 +905,40 @@ class WaveformRenderer {
     const beats  = this.metronome.getBeatPositions(startT, endT);
     const pps    = this.pixelsPerSecond;
 
+    ctx.save();
+
     for (const b of beats) {
       if (b.time > this.duration) continue;
       const x = (b.time - startT) * pps;
       if (x < 0 || x > W) continue;
 
-      // ── Système de fallback par priorité décroissante ──────────────
-      // Tier 1 (rouge)  : marqueur de boucle
-      // Tier 2 (orange) : début de mesure
-      // Tier 3 (vert)   : temps intermédiaire
-      // Si un tier est masqué, on dessine le tier inférieur visible suivant.
-
-      let color, lineH, lineW, alpha;
       const isMeasureStart = b.beatInMeasure === 0;
 
-      if (b.isLoopStart) {
-        if (this.showLoopMarkers) {
-          color = this.markerColorLoop; lineH = H * this.loopBarHeight; lineW = 2; alpha = this.loopOpacity;
-        } else if (this.showMeasureMarkers) {
-          color = this.markerColorMeasure; lineH = H * this.measureBarHeight; lineW = 1.5; alpha = this.measureOpacity;
-        } else if (this.showBeatMarkers) {
-          color = this.markerColorBeat; lineH = H * this.beatBarHeight * this.amplitudeScale * 2.0; lineW = 1; alpha = this.beatOpacity;
-        } else {
-          continue;
-        }
-      } else if (isMeasureStart) {
-        if (this.showMeasureMarkers) {
-          color = this.markerColorMeasure; lineH = H * this.measureBarHeight; lineW = 1.5; alpha = this.measureOpacity;
-        } else if (this.showBeatMarkers) {
-          color = this.markerColorBeat; lineH = H * this.beatBarHeight * this.amplitudeScale * 2.0; lineW = 1; alpha = this.beatOpacity;
-        } else {
-          continue;
-        }
-      } else {
-        if (!this.showBeatMarkers) continue;
-        color = this.markerColorBeat;
-        lineH = H * this.beatBarHeight * this.amplitudeScale * 2.0;
-        lineW = 1; alpha = this.beatOpacity;
-      }
+      if (underPass) {
+        // ── PASSE SOUS : boucle (orange) et mesure (rouge), avec étiquettes ──
+        let color, lineH, lineW, alpha, drawn = false;
 
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = color;
-      ctx.lineWidth   = lineW;
-      ctx.beginPath();
-      ctx.moveTo(x, (H - lineH) / 2);
-      ctx.lineTo(x, (H + lineH) / 2);
-      ctx.stroke();
+        if (b.isLoopStart && this.showLoopMarkers) {
+          color = this.markerColorLoop; lineH = H * this.loopBarHeight; lineW = 2; alpha = this.loopOpacity; drawn = true;
+        } else if (isMeasureStart && this.showMeasureMarkers) {
+          color = this.markerColorMeasure; lineH = H * this.measureBarHeight; lineW = 1.5; alpha = this.measureOpacity; drawn = true;
+        }
 
-      // Étiquette (toujours avec la couleur effective du tier affiché)
-      if (isMeasureStart || b.isLoopStart) {
+        if (!drawn) continue;
+
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = lineW;
+        ctx.beginPath();
+        ctx.moveTo(x, (H - lineH) / 2);
+        ctx.lineTo(x, (H + lineH) / 2);
+        ctx.stroke();
+
+        // Étiquette
         ctx.globalAlpha = 0.7;
         ctx.fillStyle   = color;
         ctx.textAlign   = 'left';
-
         if (b.isLoopStart) {
-          // Numéro de boucle calculé depuis le temps absolu
           const loopDuration = this.metronome.totalBeats * this.metronome.beatInterval;
           const loopNum = loopDuration > 0
             ? Math.floor((b.time - this.metronome.offset) / loopDuration) + 1
@@ -639,14 +946,27 @@ class WaveformRenderer {
           ctx.font = '9px monospace';
           ctx.fillText(`B${loopNum}`, x + 3, 11);
         } else {
-          // "MN" — numéro de mesure classique
           ctx.font = '10px monospace';
           ctx.fillText(`M${b.measureIdx + 1}`, x + 3, 11);
         }
+
+      } else {
+        // ── PASSE SUR : tempo (vert) sur TOUTES les positions, y compris boucle/mesure ──
+        if (!this.showBeatMarkers) continue;
+
+        const lineH = H * this.beatBarHeight * this.amplitudeScale * 2.0;
+        ctx.globalAlpha = this.beatOpacity;
+        ctx.strokeStyle = this.markerColorBeat;
+        ctx.lineWidth   = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, (H - lineH) / 2);
+        ctx.lineTo(x, (H + lineH) / 2);
+        ctx.stroke();
       }
     }
 
     ctx.globalAlpha = 1;
+    ctx.restore();
   }
 
   _drawBoundaryMarkers(ctx, W, H) {
@@ -793,7 +1113,7 @@ class WaveformRenderer {
       ctx.stroke();
 
       ctx.fillStyle = '#555';
-      ctx.fillText(this._formatTime(t), x + 3, H - 4);
+      ctx.fillText(this._formatTime(t, interval), x + 3, H - 4);
     }
 
     // Sub-ticks
@@ -894,7 +1214,7 @@ class WaveformRenderer {
 
       // ─ Halo de base coloré (pulsant si verrouillé)
       if (locked) {
-        const pulse     = 0.5 + 0.5 * Math.sin(this._lockPulse * Math.PI / 180);
+        const pulse     = 0.5 + 0.5 * Math.sin(performance.now() * 0.002618);
         ctx.shadowColor = color;
         ctx.shadowBlur  = 18 + 10 * pulse;
       } else {
@@ -919,7 +1239,7 @@ class WaveformRenderer {
 
       // ─ Contour épais pour le pin verrouillé (blanc semi-transparent = toujours plus clair que le remplissage)
       if (locked) {
-        const pulse   = 0.5 + 0.5 * Math.sin(this._lockPulse * Math.PI / 180);
+        const pulse   = 0.5 + 0.5 * Math.sin(performance.now() * 0.002618);
         ctx.shadowColor = color;
         ctx.shadowBlur  = 10 + 8 * pulse;
         ctx.strokeStyle = `rgba(255,255,255,${0.55 + 0.20 * pulse})`;
@@ -991,10 +1311,17 @@ class WaveformRenderer {
     wc.addEventListener('mouseleave',(e) => {
       this._brushPainting = false;
       this._brushErasing  = false;
+      this._lastBrushX    = null;
+      this._brushCursorEl.style.display = 'none';
       // Annuler le drag sans seek quand le curseur sort
       if (this._drag.active) {
         this._drag.active = false;
         this._drag.moved  = false;
+        this.waveCanvas.style.cursor = 'crosshair';
+      }
+      // Annuler le pan clic molette aussi
+      if (this._midDrag && this._midDrag.active) {
+        this._midDrag.active = false;
         this.waveCanvas.style.cursor = 'crosshair';
       }
     });
@@ -1055,12 +1382,23 @@ class WaveformRenderer {
 
   _onMouseDown(e) {
     if (!this.audioBuffer) return;
+    // Clic molette (button=1) : pan tempéraire, même en mode pinceau
+    if (e.button === 1) {
+      e.preventDefault();
+      this._midDrag = { active: true, startX: this._getClientX(this.waveCanvas, e), startScroll: this.scrollTime };
+      this._brushCursorEl.style.display = 'none';  // masquer pendant le pan
+      return;
+    }
     if (this.paintBrushMode) {
       if (e.button === 0) {
+        if (this.onBrushStrokeStart) this.onBrushStrokeStart();
         this._brushPainting = true;
-        this._paintMeasureAtX(this._getClientX(this.waveCanvas, e));
+        const x = this._getClientX(this.waveCanvas, e);
+        this._paintMeasureAtX(x);
+        this._lastBrushX = x;
       } else if (e.button === 2) {
         // Clic droit : démarrer l'effacement continu par glisser
+        if (this.onBrushStrokeStart) this.onBrushStrokeStart();
         this._brushErasing = true;
         const x    = this._getClientX(this.waveCanvas, e);
         const time = this.xToTime(x);
@@ -1068,6 +1406,7 @@ class WaveformRenderer {
           this.measureColors.delete(this.getMeasureAtTime(time));
           this._dirty = true;
         }
+        this._lastBrushX = x;
       }
       return;
     }
@@ -1081,19 +1420,55 @@ class WaveformRenderer {
   }
 
   _onMouseMove(e) {
+    // Pan via clic molette (prioritaire)
+    if (this._midDrag && this._midDrag.active) {
+      const dx = this._getClientX(this.waveCanvas, e) - this._midDrag.startX;
+      this.scrollTime = this._midDrag.startScroll - dx / this.pixelsPerSecond;
+      this._clampScroll();
+      this._dirty = true;
+      this.waveCanvas.style.cursor = 'grabbing';
+      return;
+    }
     if (this.paintBrushMode) {
+      // Curseur ligne verticale : mise à jour directe DOM (zéro latence)
+      const x = this._getClientX(this.waveCanvas, e);
+      this._brushCursorEl.style.left       = (x - 1) + 'px';
+      this._brushCursorEl.style.background = this.paintBrushColor;
+      this._brushCursorEl.style.display    = 'block';
       if (this._brushPainting) {
-        this._paintMeasureAtX(this._getClientX(this.waveCanvas, e));
+        if (this._lastBrushX !== null) {
+          // Interpoler : peindre toutes les mesures entre lastBrushX et x
+          const t0 = this.xToTime(this._lastBrushX);
+          const t1 = this.xToTime(x);
+          const tA = Math.max(0, Math.min(this.duration, Math.min(t0, t1)));
+          const tB = Math.max(0, Math.min(this.duration, Math.max(t0, t1)));
+          const m0 = Math.max(0, this.getMeasureAtTime(tA));
+          const m1 = Math.max(0, this.getMeasureAtTime(tB));
+          for (let m = m0; m <= m1; m++) this._paintMeasureAtIndex(m);
+        } else {
+          this._paintMeasureAtX(x);
+        }
+        this._lastBrushX = x;
       } else if (this._brushErasing) {
-        const x    = this._getClientX(this.waveCanvas, e);
-        const time = this.xToTime(x);
-        if (time >= 0 && time <= this.duration) {
-          const mIdx = this.getMeasureAtTime(time);
-          if (this.measureColors.has(mIdx)) {
-            this.measureColors.delete(mIdx);
-            this._dirty = true;
+        if (this._lastBrushX !== null) {
+          // Interpoler : effacer toutes les mesures entre lastBrushX et x
+          const t0 = this.xToTime(this._lastBrushX);
+          const t1 = this.xToTime(x);
+          const tA = Math.max(0, Math.min(this.duration, Math.min(t0, t1)));
+          const tB = Math.max(0, Math.min(this.duration, Math.max(t0, t1)));
+          const m0 = Math.max(0, this.getMeasureAtTime(tA));
+          const m1 = Math.max(0, this.getMeasureAtTime(tB));
+          for (let m = m0; m <= m1; m++) {
+            if (this.measureColors.has(m)) { this.measureColors.delete(m); this._dirty = true; }
+          }
+        } else {
+          const time = this.xToTime(x);
+          if (time >= 0 && time <= this.duration) {
+            const mIdx = this.getMeasureAtTime(time);
+            if (this.measureColors.has(mIdx)) { this.measureColors.delete(mIdx); this._dirty = true; }
           }
         }
+        this._lastBrushX = x;
       }
       return;
     }
@@ -1111,9 +1486,17 @@ class WaveformRenderer {
   }
 
   _onMouseUp(e) {
+    // Relâchement clic molette
+    if (e.button === 1 && this._midDrag) {
+      this._midDrag.active = false;
+      // Restaurer le curseur selon le mode actif (app.js gère le curseur pinceau)
+      this.waveCanvas.style.cursor = 'crosshair';
+      return;
+    }
     if (this.paintBrushMode) {
       this._brushPainting = false;
       this._brushErasing  = false;
+      this._lastBrushX    = null;
       return;
     }
     if (!this._drag.active) return;
@@ -1199,13 +1582,9 @@ class WaveformRenderer {
     this._dirty = true;
   }
 
-  _paintMeasureAtX(x) {
-    const time  = this.xToTime(x);
-    if (time < 0 || time > this.duration) return;
-    const mIdx  = this.getMeasureAtTime(time);
+  _paintMeasureAtIndex(mIdx) {
     const color = this.paintBrushColor;
-    const oldColor = this.measureColors.get(mIdx);
-    if (oldColor === color) return;
+    if (this.measureColors.get(mIdx) === color) return;
     this.measureColors.set(mIdx, color);
     // Ajouter à la palette si absent
     const inPalette = this.brushPalette.some(e => e.color === color);
@@ -1215,6 +1594,12 @@ class WaveformRenderer {
       if (this.onPaletteChange) this.onPaletteChange();
     }
     this._dirty = true;
+  }
+
+  _paintMeasureAtX(x) {
+    const time = this.xToTime(x);
+    if (time < 0 || time > this.duration) return;
+    this._paintMeasureAtIndex(Math.max(0, this.getMeasureAtTime(time)));
   }
 
   _seekToX(x) {
@@ -1227,37 +1612,43 @@ class WaveformRenderer {
     e.preventDefault();
     if (!this.audioBuffer) return;
 
-    // Position du souris en temps
-    const W   = this.waveCanvas.clientWidth;
-    const x   = this._getClientX(this.waveCanvas, e);
-    const tAtMouse = this.xToTime(x);
+    const pivot = this.xToTime(this._getClientX(this.waveCanvas, e));
 
-    const factor = e.deltaY < 0 ? 1.25 : 0.8;
-    if (e.deltaY < 0) this.zoomIn(1.25, tAtMouse);
-    else               this.zoomOut(1.25, tAtMouse);
+    if (e.deltaY < 0) this.zoomIn(1.25, pivot);
+    else               this.zoomOut(1.25, pivot);
   }
 
   /* ── Helpers ────────────────────────────────────── */
 
-  _formatTime(sec) {
-    const m  = Math.floor(sec / 60);
-    const s  = Math.floor(sec % 60);
-    const ms = Math.floor((sec % 1) * 1000);
-    if (sec >= 60)
-      return `${m}:${String(s).padStart(2,'0')}`;
-    if (sec >= 1)
-      return `${s}.${String(Math.floor((sec % 1) * 10))[0]}`;
-    return `${(sec * 1000).toFixed(0)}ms`;
+  _formatTime(sec, interval = 1) {
+    const sign = sec < 0 ? '-' : '';
+    const abs  = Math.abs(sec);
+    const m    = Math.floor(abs / 60);
+    const s    = Math.floor(abs % 60);
+    if (abs >= 60)
+      return `${sign}${m}:${String(s).padStart(2,'0')}`;
+    if (interval >= 1)
+      return `${sign}${s}.${String(Math.floor((abs % 1) * 10))[0]}`;
+    return `${sign}${(abs * 1000).toFixed(0)}ms`;
   }
 
   markDirty() { this._dirty = true; }
 
   _randomPinColor() {
     // Rotation par angle d'or : chaque nouvelle couleur est à ~137.5° de la précédente
-    // => couleurs toujours bien écartées et cycle complet avant répétition
     const GOLDEN_ANGLE = 137.508;
     const hue = Math.round(this._pinNextHue);
     this._pinNextHue = (this._pinNextHue + GOLDEN_ANGLE) % 360;
-    return `hsl(${hue},82%,62%)`;
+    // Retourne du hex pour compatibilité <input type="color"> et canvas
+    return this._hslToHex(hue, 78, 62);
+  }
+
+  _hslToHex(h, s, l) {
+    s /= 100; l /= 100;
+    const k = n => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    const x = v => Math.round(v * 255).toString(16).padStart(2, '0');
+    return `#${x(f(0))}${x(f(8))}${x(f(4))}`;
   }
 }
