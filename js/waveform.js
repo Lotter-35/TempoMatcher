@@ -40,6 +40,7 @@ class WaveformRenderer {
     this.onSeek           = null;  // fn(time)
     this.onPinClick       = null;  // fn(pinIndex, screenX, screenY)
     this.onPinDragMove    = null;  // fn(pinIndex)  — appelé pendant le drag
+    this.onPinChange      = null;  // fn()  — appelé après création / suppression / fin de drag
     this.onSineModeChange = null;  // fn(isSine) — transition entrée/sortie mode sinusoïdal
     this._isSineMode      = false; // état courant
 
@@ -845,8 +846,12 @@ class WaveformRenderer {
       const tL = this.metronome.offset + m * secPerMeasure;
       const tR = tL + secPerMeasure;
       if (tR <= 0 || tL >= this.duration) continue;
-      const xStart = Math.max(0,  (tL - startT) * pps);
-      const xEnd   = Math.min(W,  (tR - startT) * pps);
+      // Clamp aux bornes réelles du morceau pour éviter le débordement visuels
+      const tLc = Math.max(0, tL);
+      const tRc = Math.min(this.duration, tR);
+      if (tRc <= tLc) continue;
+      const xStart = Math.max(0, (tLc - startT) * pps);
+      const xEnd   = Math.min(W, (tRc - startT) * pps);
       if (xEnd <= xStart) continue;
       result.push({ measureIdx: m, xStart, xEnd });
     }
@@ -1442,8 +1447,8 @@ class WaveformRenderer {
           const t1 = this.xToTime(x);
           const tA = Math.max(0, Math.min(this.duration, Math.min(t0, t1)));
           const tB = Math.max(0, Math.min(this.duration, Math.max(t0, t1)));
-          const m0 = Math.max(0, this.getMeasureAtTime(tA));
-          const m1 = Math.max(0, this.getMeasureAtTime(tB));
+          const m0 = this.getMeasureAtTime(tA);
+          const m1 = this.getMeasureAtTime(tB);
           for (let m = m0; m <= m1; m++) this._paintMeasureAtIndex(m);
         } else {
           this._paintMeasureAtX(x);
@@ -1456,8 +1461,8 @@ class WaveformRenderer {
           const t1 = this.xToTime(x);
           const tA = Math.max(0, Math.min(this.duration, Math.min(t0, t1)));
           const tB = Math.max(0, Math.min(this.duration, Math.max(t0, t1)));
-          const m0 = Math.max(0, this.getMeasureAtTime(tA));
-          const m1 = Math.max(0, this.getMeasureAtTime(tB));
+          const m0 = this.getMeasureAtTime(tA);
+          const m1 = this.getMeasureAtTime(tB);
           for (let m = m0; m <= m1; m++) {
             if (this.measureColors.has(m)) { this.measureColors.delete(m); this._dirty = true; }
           }
@@ -1525,6 +1530,7 @@ class WaveformRenderer {
         if (Math.abs(px - x) <= HIT) {
           if (this.onPinDelete) this.onPinDelete(i);
           this.pins.splice(i, 1);
+          if (this.onPinChange) this.onPinChange();
           this._dirty = true;
           return;
         }
@@ -1558,6 +1564,7 @@ class WaveformRenderer {
       if (Math.abs(cmX - x) <= HIT) {
         this.pins.push({ time: this.clickMarkerTime, color: this._randomPinColor() });
         this.clickMarkerTime = null;
+        if (this.onPinChange) this.onPinChange();
         this._dirty = true;
         return;
       }
@@ -1567,6 +1574,7 @@ class WaveformRenderer {
     const t = this.xToTime(x);
     const clamped = Math.max(0, Math.min(this.duration, t));
     this.pins.push({ time: clamped, color: this._randomPinColor() });
+    if (this.onPinChange) this.onPinChange();
     this._dirty = true;
   }
 
@@ -1575,6 +1583,9 @@ class WaveformRenderer {
     if (!this._pinDrag.moved) {
       // Clic court → popup
       if (this.onPinClick) this.onPinClick(this._pinDrag.idx, e.clientX, e.clientY);
+    } else {
+      // Fin de drag → notifier
+      if (this.onPinChange) this.onPinChange();
     }
     this._pinDrag.active = false;
     this._pinDrag.moved  = false;
@@ -1599,7 +1610,7 @@ class WaveformRenderer {
   _paintMeasureAtX(x) {
     const time = this.xToTime(x);
     if (time < 0 || time > this.duration) return;
-    this._paintMeasureAtIndex(Math.max(0, this.getMeasureAtTime(time)));
+    this._paintMeasureAtIndex(this.getMeasureAtTime(time));
   }
 
   _seekToX(x) {

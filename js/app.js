@@ -61,6 +61,63 @@ document.addEventListener('wheel', function(e) {
 (function () {
   'use strict';
 
+  /* ══ Persistance navigateur (localStorage) ══════════════════════ */
+  /**
+   * TM_Storage — module de persistance modulaire par section.
+   * Chaque section est une clé indépendante dans un objet JSON stocké
+   * sous la clé localStorage 'tempomatcher_prefs'.
+   * Pour ajouter une nouvelle section, appeler simplement :
+   *   TM_Storage.save('maSectionId', data)
+   *   TM_Storage.load('maSectionId')
+   */
+  const TM_Storage = (() => {
+    const STORAGE_KEY = 'tempomatcher_prefs';
+    function _read() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
+      catch { return {}; }
+    }
+    function _write(data) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+    }
+    return {
+      /** Enregistre une section (id unique) avec la valeur donnée. */
+      save(section, value) {
+        const all = _read(); all[section] = value; _write(all);
+      },
+      /** Lit une section ; retourne `fallback` si absente. */
+      load(section, fallback = undefined) {
+        const all = _read();
+        return Object.prototype.hasOwnProperty.call(all, section) ? all[section] : fallback;
+      },
+      /** Supprime une section. */
+      remove(section) {
+        const all = _read(); delete all[section]; _write(all);
+      },
+    };
+  })();
+
+  /**
+   * TM_SongStorage — données liées à chaque piste audio (clé = nom de fichier).
+   * Piggybacked sur TM_Storage sous la section 'songs'.
+   * Usage : TM_SongStorage.save(fileName, data) / TM_SongStorage.load(fileName)
+   */
+  const TM_SongStorage = (() => {
+    function _normKey(name) { return name.trim().toLowerCase(); }
+    return {
+      /** Sauvegarde toutes les données d'une piste d'un coup. */
+      save(fileName, data) {
+        const all = TM_Storage.load('songs', {});
+        all[_normKey(fileName)] = data;
+        TM_Storage.save('songs', all);
+      },
+      /** Lit les données d'une piste ; null si absente. */
+      load(fileName) {
+        const all = TM_Storage.load('songs', {});
+        return all[_normKey(fileName)] ?? null;
+      },
+    };
+  })();
+
   /* ══ Instances ══════════════════════════════════════════════════ */
 
   const audio    = new AudioEngine();
@@ -135,16 +192,29 @@ document.addEventListener('wheel', function(e) {
   // Compteur de boucles
   let _loopCount   = 0;
   let _flashTimers = [];
-  let _skipFirstLoop = false;  // utilisé en preview pour ne pas double-compter
+  let _skipFirstLoop = false;
+  let _onBeatSeq   = 0;        // incrémenté à chaque (re)démarrage : invalide les anciens setTimeout onBeat
+  let _lastFiredAbsBeatIndex = 0; // index absolu du dernier beat affiché (référence pour les resyncs)
 
   /* ── Slots beats ─────────────────────────────── */
   function buildBeatSlots() {
     mcBeatsRow.innerHTML = '';
-    for (let i = 0; i < metro.beatsPerMeasure; i++) {
+    const n  = metro.beatsPerMeasure;
+    // À partir de 6 temps : réduire la police MAIS conserver la hauteur du slot (44px)
+    // pour que le compteur ne change pas de taille selon la métrique
+    const fs = n >= 6 ? Math.max(16, Math.round(44 * 4 / (n + 1))) : null;
+    const gp = n >= 6 ? 4 : 10;
+    mcBeatsRow.style.gap = gp + 'px';
+    for (let i = 0; i < n; i++) {
       const slot = document.createElement('div');
       slot.className = 'mc-slot';
       if (i === 0) slot.classList.add('mc-slot-measure');
       slot.dataset.beat = i;
+      if (fs !== null) {
+        slot.style.fontSize  = fs + 'px';
+        slot.style.height    = '44px';   // hauteur identique à la taille par défaut
+        slot.style.minHeight = '44px';
+      }
       const label = i === 0 ? '\u2013' : (i + 1);
       slot.innerHTML = `<span class="mc-slot-num">${label}</span>`;
       mcBeatsRow.appendChild(slot);
@@ -186,18 +256,22 @@ document.addEventListener('wheel', function(e) {
   function resetMetroCounter() {
     _loopCount = 0;
     _skipFirstLoop = false;
+    _onBeatSeq++;            // invalider tous les setTimeout onBeat en attente
     buildBeatSlots();
-    if (mcMeasure) mcMeasure.textContent = `\u2013\u202f/\u202f${metro.measuresPerLoop}`;
+    if (mcMeasure) mcMeasure.textContent = '\u2013';
     if (mcLoop)    mcLoop.textContent    = '\u2013';
   }
 
-  metro.onBeat = (beatInMeasure, measureIdx, audioTime) => {
+  metro.onBeat = (beatInMeasure, measureIdx, audioTime, absBeatIndex) => {
     const isLoopStart = (beatInMeasure === 0 && measureIdx === 0);
     const activeCtx   = audio.isPlaying ? audio.audioContext
                       : (_previewActive ? _previewCtx : null);
     const delayMs = activeCtx ? Math.max(0, (audioTime - activeCtx.currentTime) * 1000) : 0;
+    const seq = _onBeatSeq;
 
     setTimeout(() => {
+      if (seq !== _onBeatSeq) return;
+      _lastFiredAbsBeatIndex = absBeatIndex;
       if (isLoopStart) {
         if (_skipFirstLoop) { _skipFirstLoop = false; }
         else { _loopCount++; }
@@ -222,6 +296,19 @@ document.addEventListener('wheel', function(e) {
     if (_previewCtx) { _previewCtx.close(); _previewCtx = null; }
     _setPreviewUI(false);
     resetMetroCounter();
+  }
+
+  /**
+   * Réinitialise le preview depuis le temps 1 (changement de signature rythmique).
+   * À appeler après avoir mis à jour metro.beatsPerMeasure ou metro.measuresPerLoop.
+   */
+  function _previewRestartFromZero() {
+    if (!_previewActive || !_previewCtx) return;
+    resetMetroCounter();   // rebuild slots + display –
+    _loopCount      = 1;   // la 1ère boucle sera la #1
+    _skipFirstLoop  = true; // le 1er isLoopStart ne doit pas incrémenter à nouveau
+    metro.stop();
+    metro.start(_previewCtx, _previewCtx.currentTime, 0);
   }
 
   const amplitudeSlider  = $('amplitude-slider');
@@ -284,6 +371,7 @@ document.addEventListener('wheel', function(e) {
     // Resync métronome si en lecture
     resyncMetronome();
     waveform.markDirty();
+    _saveSongData();
   }
 
   function setOffset(offset) {
@@ -300,9 +388,18 @@ document.addEventListener('wheel', function(e) {
     resyncMetronome();
     updateCounterFromPosition(waveform.playheadTime);
     waveform.markDirty();
+    _saveSongData();
   }
 
   function resyncMetronome() {
+    if (_bpmSliderDragging) return;
+    // Preview actif : reprendre depuis le beat suivant le dernier affiché
+    if (_previewActive && _previewCtx) {
+      const newPlaybackPos = metro.offset + (_lastFiredAbsBeatIndex + 0.5) * metro.beatInterval;
+      _onBeatSeq++;
+      metro.resync(_previewCtx, _previewCtx.currentTime, newPlaybackPos);
+      return;
+    }
     if (!audio.isPlaying) return;
     const info = audio.getSyncInfo();
     if (!info) return;
@@ -358,6 +455,188 @@ document.addEventListener('wheel', function(e) {
     rafUpdate = requestAnimationFrame(loop);
   }
 
+  /* ══ Indicateur de sauvegarde + reset morceau ═════════════════════ */
+
+  const _saveIndicator = $('save-indicator');
+  const btnResetSong   = $('btn-reset-song');
+  let _saveFlashTimer  = null;
+
+  function _flashSaveIndicator() {
+    if (!_saveIndicator) return;
+    // Redémarrer l'animation : retirer la classe, forcer le reflow, la remettre
+    _saveIndicator.classList.remove('spinning');
+    void _saveIndicator.offsetWidth;
+    _saveIndicator.classList.add('spinning');
+    if (_saveFlashTimer) clearTimeout(_saveFlashTimer);
+    _saveFlashTimer = setTimeout(() => _saveIndicator.classList.remove('spinning'), 600);
+  }
+
+  function _resetSongData() {
+    if (!_loadedFileName) return;
+
+    // Supprimer du stockage
+    const all = TM_Storage.load('songs', {});
+    delete all[_loadedFileName.trim().toLowerCase()];
+    TM_Storage.save('songs', all);
+
+    // Réinitialiser : métrique, offset, clic, sections (identique à une nouvelle piste)
+    _restoringData = true;
+    setBPM(120);
+    beatsPerMeasureGroup.querySelector('.seg-btn[data-val="4"]')?.click();
+    measuresPerLoopGroup.querySelector('.seg-btn[data-val="4"]')?.click();
+    loopsPerGroupGroup.querySelector('.seg-btn[data-val="4"]')?.click();
+    setOffset(0);
+    clickProfileSel.value = 'defaut';  metro.clickProfile = 'defaut';
+    metroVolSlider.value  = 1;         metro.volume       = 1;    metroVolPct.textContent = pct(1);
+    waveform.brushPalette  = [];
+    waveform.measureColors = new Map();
+    waveform._paletteIdCounter = 0;
+    waveform.pins          = [];
+    _lockedPinIdx          = -1;
+    waveform.lockedPinTime = null;
+    offsetGroup.classList.remove('locked');
+    applyProfile('defaut');
+    markerProfileSelect.value = 'defaut';
+    renderBrushPalette();
+    waveform.markDirty();
+    _restoringData = false;
+
+    // Masquer le bouton reset, lancer l'auto-détect
+    btnResetSong.style.display = 'none';
+    btnDetect.disabled = true;
+    showLoading('Détection BPM…', 0.95);
+    detectBPM(audio.audioBuffer)
+      .then(bpm => setBPM(bpm))
+      .catch(() => {})
+      .finally(() => { btnDetect.disabled = false; hideLoading(); });
+  }
+
+  btnResetSong.addEventListener('click', _resetSongData);
+
+  /* ══ Persistance par piste (BPM, métrique, offset, clic, sections) ════════ */
+
+  let _restoringData = false; // vrai pendant _restoreSongData → bloque _saveSongData
+
+  function _saveSongData() {
+    if (!_loadedFileName || _restoringData) return;
+    TM_SongStorage.save(_loadedFileName, {
+      bpm:             metro.bpm,
+      beatsPerMeasure: metro.beatsPerMeasure,
+      measuresPerLoop: metro.measuresPerLoop,
+      loopsPerGroup:   waveform.loopsPerGroup,
+      offset:          metro.offset,
+      clickProfile:    clickProfileSel.value,
+      metroVol:        parseFloat(metroVolSlider.value),
+      sections: {
+        palette:       waveform.brushPalette.map(e => ({ ...e })),
+        measureColors: Array.from(waveform.measureColors.entries()),
+      },
+      pins:          waveform.pins.map(p => ({ ...p })),
+      lockedPinTime: _lockedPinIdx >= 0 && _lockedPinIdx < waveform.pins.length
+                       ? waveform.pins[_lockedPinIdx].time
+                       : null,
+      markerProfile: markerProfileSelect.value !== 'personnalise' ? markerProfileSelect.value : null,
+      markerParams: {
+        loopColor:     waveform.markerColorLoop,
+        measureColor:  waveform.markerColorMeasure,
+        beatColor:     waveform.markerColorBeat,
+        bandsColor:    waveform.loopBandColor,
+        waveColor:     waveform.waveColorStroke,
+        loopHeight:    waveform.loopBarHeight,
+        measureHeight: waveform.measureBarHeight,
+        beatHeight:    waveform._isSineMode && _sineSavedHeight != null
+                         ? _sineSavedHeight * waveform.amplitudeScale * 2.0
+                         : parseFloat(beatBarHeightSlider.value),
+        bandsHeight:   waveform.loopBandHeightScale,
+        loopOpacity:   waveform.loopOpacity,
+        measureOpacity: waveform.measureOpacity,
+        beatOpacity:   waveform._isSineMode && _sineSavedOpacity != null
+                         ? _sineSavedOpacity
+                         : waveform.beatOpacity,
+        bandsOpacity:  waveform.bandOpacity,
+        waveOpacity:   waveform.waveOpacity,
+      },
+    });
+    _flashSaveIndicator();
+    btnResetSong.style.display = '';
+  }
+
+  function _restoreSongData(data) {
+    _restoringData = true;
+    // 1. BPM (avant métrique/offset : l'offset range en dépend)
+    if (data.bpm != null) setBPM(data.bpm);
+    // 2. Métrique — cliquer les boutons déclenche les callbacks complets
+    if (data.beatsPerMeasure != null) {
+      const m = beatsPerMeasureGroup.querySelector(`.seg-btn[data-val="${data.beatsPerMeasure}"]`);
+      if (m) m.click();
+    }
+    if (data.measuresPerLoop != null) {
+      const m = measuresPerLoopGroup.querySelector(`.seg-btn[data-val="${data.measuresPerLoop}"]`);
+      if (m) m.click();
+    }
+    if (data.loopsPerGroup != null) {
+      const m = loopsPerGroupGroup.querySelector(`.seg-btn[data-val="${data.loopsPerGroup}"]`);
+      if (m) m.click();
+    }
+    // 3. Offset (après offset range mis à jour par BPM + métrique)
+    if (data.offset != null) setOffset(data.offset);
+    // 4. Profil de clic métronome
+    if (data.clickProfile != null) {
+      clickProfileSel.value = data.clickProfile;
+      metro.clickProfile    = data.clickProfile;
+    }
+    // 5. Volume métronome
+    if (data.metroVol != null) {
+      const v = data.metroVol;
+      metroVolSlider.value    = v;
+      metro.volume            = v;
+      metroVolPct.textContent = pct(v);
+    }
+    // 6. Sections pinceau
+    if (data.sections) {
+      waveform.brushPalette  = (data.sections.palette      || []).map(e => ({ ...e }));
+      waveform.measureColors = new Map(data.sections.measureColors || []);
+      // Recaler le compteur d'ID pour éviter les collisions
+      const maxId = waveform.brushPalette.reduce((max, e) => Math.max(max, e.id ?? 0), 0);
+      waveform._paletteIdCounter = maxId + 1;
+    }
+    // 7. Pins (marqueurs règle + verrou)
+    _lockedPinIdx          = -1;
+    waveform.lockedPinTime = null;
+    offsetGroup.classList.remove('locked');
+    if (data.pins && data.pins.length > 0) {
+      waveform.pins = data.pins.map(p => ({ ...p }));
+      if (data.lockedPinTime != null) {
+        const li = waveform.pins.findIndex(p => p.time === data.lockedPinTime);
+        if (li >= 0) {
+          _lockedPinIdx = li;
+          waveform.lockedPinTime = data.lockedPinTime;
+          offsetGroup.classList.add('locked');
+        }
+      }
+    } else {
+      waveform.pins = [];
+    }
+    // 8. Preset de marqueurs visuels (nom ou paramètres bruts)
+    if (data.markerProfile && MARKER_PROFILES[data.markerProfile]) {
+      // Preset nommé connu : l'appliquer normalement
+      applyProfile(data.markerProfile);
+      markerProfileSelect.value = data.markerProfile;
+    } else if (data.markerParams) {
+      // Preset personnalisé ou preset supprimé : restaurer les paramètres bruts
+      _applyProfileData(data.markerParams);
+      markerProfileSelect.value = 'personnalise';
+      _baseProfileKey = 'defaut';
+    } else {
+      applyProfile('defaut');
+      markerProfileSelect.value = 'defaut';
+    }
+    renderBrushPalette();
+    waveform.markDirty();
+    _restoringData = false;
+    _saveSongData(); // une seule sauvegarde finale avec l'état complet restauré
+  }
+
   /* ══ Chargement fichier ═════════════════════════════════════════ */
 
   async function loadAudioFile(file) {
@@ -375,8 +654,6 @@ document.addEventListener('wheel', function(e) {
     timeCurrent.textContent = formatTime(0);
     updatePlayIcons();
     resetMetroCounter();
-    // Vider les couleurs pinceau de l'ancienne piste
-    waveform.measureColors.clear();
     waveform.markDirty();
 
     showLoading('Chargement…', 0);
@@ -398,6 +675,10 @@ document.addEventListener('wheel', function(e) {
     audioLoaded = true;
     _loadedFileName = file.name;
 
+    // Réinitialiser les données visuelles (ancienne piste)
+    waveform.measureColors.clear();
+    waveform.brushPalette = [];
+
     fileName.textContent    = file.name;
     timeTotal.textContent   = formatTime(audio.duration);
     timeCurrent.textContent = formatTime(0);
@@ -408,17 +689,29 @@ document.addEventListener('wheel', function(e) {
     waveform.setAudio(audio.audioBuffer);
     startUpdateLoop();
 
-    // Auto-détection BPM
-    btnDetect.disabled = true;
-    showLoading('Détection BPM…', 0.95);
-    try {
-      const detectedBPM = await detectBPM(audio.audioBuffer);
-      setBPM(detectedBPM);
-    } catch (_) {
-      // silencieux
-    } finally {
-      btnDetect.disabled = false;
-      hideLoading();
+    // Restaurer les données sauvegardées pour cette piste
+    const _savedSong = TM_SongStorage.load(file.name);
+    if (_savedSong) {
+      btnResetSong.style.display = '';
+      _restoreSongData(_savedSong);
+    } else {
+      btnResetSong.style.display = 'none';
+      renderBrushPalette(); // Afficher la palette vide
+    }
+
+    // Auto-détection BPM uniquement si aucun BPM sauvegardé pour cette piste
+    if (!_savedSong?.bpm) {
+      btnDetect.disabled = true;
+      showLoading('Détection BPM…', 0.95);
+      try {
+        const detectedBPM = await detectBPM(audio.audioBuffer);
+        setBPM(detectedBPM);
+      } catch (_) {
+        // silencieux
+      } finally {
+        btnDetect.disabled = false;
+        hideLoading();
+      }
     }
   }
 
@@ -531,7 +824,19 @@ document.addEventListener('wheel', function(e) {
     const pp = document.getElementById('vol-panel-pct');
     if (ps) ps.value = v;
     if (pp) pp.textContent = pct(v);
+    TM_Storage.save('volume', v);
   }
+
+  // Restaurer le volume depuis localStorage
+  (function _restoreVolume() {
+    const saved = TM_Storage.load('volume');
+    if (saved == null) return;
+    const v = parseFloat(saved);
+    if (isNaN(v)) return;
+    audio.setVolume(v);
+    volumeSlider.value = v;
+    syncVolDisplays(v);
+  })();
 
   volumeSlider.addEventListener('input', () => {
     const v = parseFloat(volumeSlider.value);
@@ -583,6 +888,28 @@ document.addEventListener('wheel', function(e) {
   waveform.zoomOut = (...args) => { _origZoomOut(...args); updateZoomLabel(); };
 
   /* ══ BPM ═════════════════════════════════════════════════════════ */
+
+  let _bpmSliderDragging = false;
+  let _pausedElapsed     = 0; // position capturée au moment du freeze
+  let _pausedAbsBeatIndex = 0; // index absolu du beat affiché au moment du freeze (avec l'ancien BPM)
+
+  // Pendant le drag : freezer le métronome et mémoriser la position exacte
+  bpmSlider.addEventListener('mousedown', () => {
+    if (!_previewActive) return;
+    _bpmSliderDragging = true;
+    _pausedAbsBeatIndex = Math.floor(Math.max(0, _pausedElapsed - metro.offset) / metro.beatInterval);
+    metro.stop();
+  });
+  document.addEventListener('mouseup', () => {
+    if (!_bpmSliderDragging) return;
+    _bpmSliderDragging = false;
+    if (_previewActive && _previewCtx) {
+      const ref = _lastFiredAbsBeatIndex;
+      const newPlaybackPos = metro.offset + (ref + 0.5) * metro.beatInterval;
+      _onBeatSeq++;
+      metro.start(_previewCtx, _previewCtx.currentTime, newPlaybackPos);
+    }
+  });
 
   bpmSlider.addEventListener('input', () => setBPM(parseFloat(bpmSlider.value)));
 
@@ -651,27 +978,37 @@ document.addEventListener('wheel', function(e) {
 
   initSegBtnGroup(beatsPerMeasureGroup, val => {
     metro.beatsPerMeasure = val;
-    buildBeatSlots();
-    if (!_previewActive) updateCounterFromPosition(waveform.playheadTime);
+    if (_previewActive) {
+      _previewRestartFromZero(); // reset complet + repart du temps 1
+    } else {
+      buildBeatSlots();
+      if (audio.isPlaying) updateCounterFromPosition(waveform.playheadTime);
+      resyncMetronome();
+    }
     updateOffsetRange();
     _applyLockOffset();
-    resyncMetronome();
     waveform.markDirty();
+    _saveSongData();
   });
 
   initSegBtnGroup(measuresPerLoopGroup, val => {
     metro.measuresPerLoop = val;
-    if (!_previewActive) updateCounterFromPosition(waveform.playheadTime);
-    else if (mcMeasure) mcMeasure.textContent = `\u2013\u202f/\u202f${val}`;
+    if (_previewActive) {
+      _previewRestartFromZero(); // reset complet + repart du temps 1
+    } else {
+      if (audio.isPlaying) updateCounterFromPosition(waveform.playheadTime);
+      resyncMetronome();
+    }
     updateOffsetRange();
     _applyLockOffset();
-    resyncMetronome();
     waveform.markDirty();
+    _saveSongData();
   });
 
   initSegBtnGroup(loopsPerGroupGroup, val => {
     waveform.loopsPerGroup = val;
     waveform.markDirty();
+    _saveSongData();
   });
 
   /* ══ Offset ══════════════════════════════════════════════════════ */
@@ -690,10 +1027,8 @@ document.addEventListener('wheel', function(e) {
 
   clickProfileSel.addEventListener('change', () => {
     metro.clickProfile = clickProfileSel.value;
-    // Si le preview tourne, resync avec le nouveau profil
-    if (_previewActive && _previewCtx) {
-      metro.resync(_previewCtx, _previewCtx.currentTime, 0);
-    }
+    // Pas de resync nécessaire : le profil est lu au moment du clic audio
+    _saveSongData();
   });
 
   btnMetroPreview.addEventListener('click', () => {
@@ -724,6 +1059,7 @@ document.addEventListener('wheel', function(e) {
     const v = parseFloat(metroVolSlider.value);
     metro.volume = v;
     metroVolPct.textContent = pct(v);
+    _saveSongData();
   });
 
   /* ══ Bouton Loop ════════════════════════════════════════════════════ */
@@ -889,6 +1225,10 @@ document.addEventListener('wheel', function(e) {
 
   // Brancher le callback : snapshot avant chaque trait de pinceau ou effacement
   waveform.onBrushStrokeStart = () => brushPushUndo();
+  // Sauvegarder les couleurs de mesures après chaque trait de pinceau
+  waveform.waveCanvas.addEventListener('pointerup', () => {
+    if (_loadedFileName && waveform.paintBrushMode) _saveSongData();
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -940,6 +1280,7 @@ document.addEventListener('wheel', function(e) {
     waveform.paintBrushColor = color;
     activateBrush();
     renderBrushPalette(id);
+    _saveSongData();
   }
 
   function renderBrushPalette(autoFocusId) {
@@ -1002,6 +1343,7 @@ document.addEventListener('wheel', function(e) {
         palette.splice(toIdx, 0, moved);
         _paletteDragId = null;
         renderBrushPalette();
+        _saveSongData();
       });
 
       // Carré couleur (clic → sélectionner cette couleur dans le pinceau)
@@ -1055,6 +1397,7 @@ document.addEventListener('wheel', function(e) {
           }
           waveform.markDirty();
           renderBrushPalette();
+          _saveSongData();
         };
         input.addEventListener('blur',   commit);
         input.addEventListener('keydown', ev => {
@@ -1121,6 +1464,7 @@ document.addEventListener('wheel', function(e) {
       colorInput.addEventListener('change', () => {
         _colorSnapDone = false;  // réinitialiser pour la prochaine session picker
         renderBrushPalette();
+        _saveSongData();
       });
 
       row.appendChild(swatch);
@@ -1153,6 +1497,7 @@ document.addEventListener('wheel', function(e) {
         if (brushColorPicker.value === color) deactivateBrush();
         waveform.markDirty();
         renderBrushPalette();
+        _saveSongData();
       });
       row.appendChild(delBtn);
 
@@ -1423,6 +1768,7 @@ document.addEventListener('wheel', function(e) {
     offsetGroup.classList.add('locked');
     _applyLockOffset();
     waveform.markDirty();
+    _saveSongData();
   });
 
   // Mise à jour du verrou lors d'une suppression par clic droit
@@ -1442,6 +1788,7 @@ document.addEventListener('wheel', function(e) {
     if (_activePinIdx < 0 || _activePinIdx >= waveform.pins.length) return;
     waveform.pins[_activePinIdx].color = pinColorInput.value;
     waveform.markDirty();
+    _saveSongData();
   });
 
   pinBtnDelete.addEventListener('click', () => {
@@ -1457,6 +1804,7 @@ document.addEventListener('wheel', function(e) {
     }
     waveform.pins.splice(_activePinIdx, 1);
     waveform.markDirty();
+    _saveSongData();
     closePinPopup();
   });
 
@@ -1476,6 +1824,7 @@ document.addEventListener('wheel', function(e) {
     }
 
     waveform.markDirty();
+    _saveSongData();
     closePinPopup();
   });
 
@@ -1484,6 +1833,9 @@ document.addEventListener('wheel', function(e) {
     if (idx !== _lockedPinIdx) return;
     _applyLockOffset();
   };
+
+  // Sauvegarde après tout changement de pin (création, suppression, fin de drag)
+  waveform.onPinChange = () => _saveSongData();
 
   // Fermer le popup sur clic extérieur
   document.addEventListener('mousedown', (e) => {
@@ -1537,6 +1889,7 @@ document.addEventListener('wheel', function(e) {
       waveform.pins.length   = 0;
     }
     waveform.markDirty();
+    _saveSongData();
     closeRulerCtxMenu();
   });
 
@@ -1634,6 +1987,16 @@ document.addEventListener('wheel', function(e) {
   const resizeHandle  = document.getElementById('wave-resize-handle');
   const MIN_WAVE_H    = 60;
   const MAX_WAVE_H    = 600;
+  const WAVE_H_KEY    = 'tempomatcher_wave_height';
+
+  // Restaurer la hauteur sauvegardée de la waveform
+  (function _restoreWaveHeight() {
+    const saved = parseInt(localStorage.getItem(WAVE_H_KEY), 10);
+    if (saved >= MIN_WAVE_H && saved <= MAX_WAVE_H) {
+      waveSection.style.flex   = `0 0 ${saved}px`;
+      waveSection.style.height = saved + 'px';
+    }
+  })();
 
   let _resizing      = false;
   let _resizeStartY  = 0;
@@ -1641,9 +2004,13 @@ document.addEventListener('wheel', function(e) {
 
   resizeHandle.addEventListener('mousedown', e => {
     e.preventDefault();
+    // Épingler immédiatement la hauteur courante pour éviter le saut au premier mousemove
+    const h = waveSection.offsetHeight;
+    waveSection.style.flex   = `0 0 ${h}px`;
+    waveSection.style.height = h + 'px';
     _resizing      = true;
     _resizeStartY  = e.clientY;
-    _resizeStartH  = waveSection.offsetHeight;
+    _resizeStartH  = h;
     resizeHandle.classList.add('dragging');
     document.body.style.cursor     = 'ns-resize';
     document.body.style.userSelect = 'none';
@@ -1665,6 +2032,8 @@ document.addEventListener('wheel', function(e) {
     resizeHandle.classList.remove('dragging');
     document.body.style.cursor     = '';
     document.body.style.userSelect = '';
+    // Sauvegarder la hauteur pour la prochaine session
+    localStorage.setItem(WAVE_H_KEY, waveSection.offsetHeight);
     waveform.markDirty();
   });
 
@@ -1700,13 +2069,52 @@ document.addEventListener('wheel', function(e) {
 
   // Labels non-profil
   amplitudePct.textContent = pct(0.5);
-  volumePct.textContent    = pct(0.8);
+  // volumePct est initialisé par _restoreVolume() → syncVolDisplays(), pas besoin ici
   metroVolPct.textContent  = pct(1.0);
 
   /* ══ Profils visuels marqueurs ══════════════════════════════════ */
 
   // Clés des profils natifs (jamais supprimables, non écrasables)
   const BUILT_IN_PROFILES = new Set(['defaut', 'nocturne', 'vif', 'pastel', 'mono', 'personnalise']);
+
+  // ── Persistance des profils marqueurs ──────────────────────────────
+
+  /** Sauvegarde les profils utilisateur + la clé active dans localStorage. */
+  function _saveProfiles() {
+    const userProfiles = {};
+    for (const [key, val] of Object.entries(MARKER_PROFILES)) {
+      if (!BUILT_IN_PROFILES.has(key)) userProfiles[key] = val;
+    }
+    // Ne sauvegarder que les profils utilisateur, pas la sélection active
+    // (le preset est restauré par morceau via TM_SongStorage)
+    TM_Storage.save('markerProfiles', { profiles: userProfiles });
+  }
+
+  /**
+   * Restaure les profils utilisateur + la sélection depuis localStorage.
+   * Doit être appelée après MARKER_PROFILES et le DOM.
+   * Retourne la clé du profil à appliquer au démarrage.
+   */
+  function _restoreProfiles() {
+    const saved = TM_Storage.load('markerProfiles');
+    if (!saved) return 'defaut';
+    // Réinjecter les profils utilisateur
+    const profiles = saved.profiles || {};
+    for (const [name, data] of Object.entries(profiles)) {
+      if (BUILT_IN_PROFILES.has(name)) continue;
+      MARKER_PROFILES[name] = data;
+      const personnaliseOpt = markerProfileSelect.querySelector('option[value="personnalise"]');
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = '★ ' + name;
+      opt.style.color = '#f0b94a';
+      opt.style.fontStyle = 'italic';
+      markerProfileSelect.insertBefore(opt, personnaliseOpt);
+    }
+    // Toujours démarrer sur le preset par défaut au chargement de la page.
+    // Le preset spécifique au morceau sera restauré par _restoreSongData.
+    return 'defaut';
+  }
 
   // ── État de gestion des profils ──────────────────────────────────
   let _applyingProfile = false;   // vrai pendant applyProfile() → bloque updateProfileSelect
@@ -1768,6 +2176,8 @@ document.addEventListener('wheel', function(e) {
     btnAddProfile.classList.toggle('active-hint', isCustom);
     // Poubelle : visible uniquement sur les profils utilisateur
     btnDelProfile.style.display = isUser ? '' : 'none';
+    // Colorer le select fermé en orange si profil utilisateur sélectionné
+    markerProfileSelect.classList.toggle('profile-select--custom', isUser);
   }
 
   // Détecte si l'état courant correspond à un profil connu ; sinon → "Personnalisé"
@@ -1792,35 +2202,35 @@ document.addEventListener('wheel', function(e) {
       loopColor: '#ff3355', measureColor: '#ff8800', beatColor: '#33dd88',
       bandsColor: '#ffffff', waveColor: '#3d8edd',
       loopHeight: 1.0, measureHeight: 0.70, beatHeight: 0.05, bandsHeight: 1.0,
-      loopOpacity: 1.0, measureOpacity: 1.0, beatOpacity: 0.60,
+      loopOpacity: 0.7, measureOpacity: 0.4, beatOpacity: 0.50,
       bandsOpacity: 0.07, waveOpacity: 1.0,
     },
     nocturne: {
       loopColor: '#6655ff', measureColor: '#9966cc', beatColor: '#44aacc',
       bandsColor: '#334477', waveColor: '#2255bb',
       loopHeight: 0.80, measureHeight: 0.55, beatHeight: 0.08, bandsHeight: 1.0,
-      loopOpacity: 1.0, measureOpacity: 1.0, beatOpacity: 0.35,
+      loopOpacity: 0.7, measureOpacity: 0.4, beatOpacity: 0.35,
       bandsOpacity: 0.10, waveOpacity: 0.75,
     },
     vif: {
       loopColor: '#ff0066', measureColor: '#ffcc00', beatColor: '#00ffaa',
       bandsColor: '#ff6600', waveColor: '#00ccff',
       loopHeight: 1.0, measureHeight: 0.85, beatHeight: 0.05, bandsHeight: 1.0,
-      loopOpacity: 1.0, measureOpacity: 1.0, beatOpacity: 0.70,
+      loopOpacity: 0.7, measureOpacity: 0.4, beatOpacity: 0.4,
       bandsOpacity: 0.12, waveOpacity: 1.0,
     },
     pastel: {
       loopColor: '#ffaabb', measureColor: '#ffddaa', beatColor: '#aaffcc',
       bandsColor: '#bbccff', waveColor: '#99bbff',
       loopHeight: 1.0, measureHeight: 0.70, beatHeight: 0.05, bandsHeight: 1.0,
-      loopOpacity: 1.0, measureOpacity: 1.0, beatOpacity: 0.55,
+      loopOpacity: 0.7, measureOpacity: 0.4, beatOpacity: 0.55,
       bandsOpacity: 0.05, waveOpacity: 0.70,
     },
     mono: {
       loopColor: '#ffffff', measureColor: '#cccccc', beatColor: '#999999',
       bandsColor: '#ffffff', waveColor: '#dddddd',
       loopHeight: 1.0, measureHeight: 0.60, beatHeight: 0.08, bandsHeight: 1.0,
-      loopOpacity: 1.0, measureOpacity: 1.0, beatOpacity: 0.70,
+      loopOpacity: 0.7, measureOpacity: 0.4, beatOpacity: 0.70,
       bandsOpacity: 0.04, waveOpacity: 0.80,
     },
   };
@@ -1831,10 +2241,8 @@ document.addEventListener('wheel', function(e) {
     waveform.waveColorFill   = `rgb(${Math.round(r*0.45)},${Math.round(g*0.45)},${Math.round(b*0.45)})`;
   }
 
-  function applyProfile(name) {
-    const p = MARKER_PROFILES[name]; if (!p) return;
+  function _applyProfileData(p) {
     _applyingProfile = true;
-    if (name !== 'personnalise') _baseProfileKey = name;
     // Couleurs
     colorLoop.value          = p.loopColor;    waveform.markerColorLoop    = p.loopColor;
     colorMeasure.value       = p.measureColor; waveform.markerColorMeasure = p.measureColor;
@@ -1869,13 +2277,21 @@ document.addEventListener('wheel', function(e) {
     _applyingProfile = false;
   }
 
+  function applyProfile(name) {
+    const p = MARKER_PROFILES[name]; if (!p) return;
+    if (name !== 'personnalise') _baseProfileKey = name;
+    _applyProfileData(p);
+  }
+
   markerProfileSelect.addEventListener('change', () => {
     const name = markerProfileSelect.value;
     if (name !== 'personnalise') {
       _baseProfileKey = name;
       applyProfile(name);
+      _saveSongData();
     }
     _syncAddProfileBtn();
+    _saveProfiles();
   });
 
   btnProfileReset.addEventListener('click', () => {
@@ -1886,8 +2302,10 @@ document.addEventListener('wheel', function(e) {
     _syncAddProfileBtn();
   });
 
-  // Appliquer le profil défaut au chargement (sliders + waveform + labels)
-  applyProfile('defaut');
+  // Restaurer les profils utilisateur depuis localStorage, puis appliquer le dernier
+  const _startProfile = _restoreProfiles();
+  applyProfile(_startProfile);
+  markerProfileSelect.value = _startProfile;
   _syncAddProfileBtn();
 
   // ── Input inline : afficher / cacher ───────────────────────────────
@@ -1945,7 +2363,10 @@ document.addEventListener('wheel', function(e) {
     if (!alreadyExists) {
       const personnaliseOpt = markerProfileSelect.querySelector('option[value="personnalise"]');
       const opt = document.createElement('option');
-      opt.value = name; opt.textContent = name;
+      opt.value = name;
+      opt.textContent = '★ ' + name;
+      opt.style.color = '#f0b94a';
+      opt.style.fontStyle = 'italic';
       markerProfileSelect.insertBefore(opt, personnaliseOpt);
     }
 
@@ -1953,6 +2374,7 @@ document.addEventListener('wheel', function(e) {
     markerProfileSelect.value = name;
     _baseProfileKey = name;
     _syncAddProfileBtn();
+    _saveProfiles();
   }
 
   btnAddProfile.addEventListener('click', () => {
@@ -1982,6 +2404,7 @@ document.addEventListener('wheel', function(e) {
     markerProfileSelect.value = 'personnalise';
     _baseProfileKey = 'defaut';
     _syncAddProfileBtn();
+    _saveProfiles();
   });
 
   btnResetHeights.addEventListener('click', () => {

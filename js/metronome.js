@@ -130,7 +130,7 @@ class Metronome {
         }
 
         if (this.onBeat) {
-          this.onBeat(beatInM, meas, this._nextBeatAudioTime);
+          this.onBeat(beatInM, meas, this._nextBeatAudioTime, this._nextBeatIndex);
         }
       }
 
@@ -191,12 +191,12 @@ class Metronome {
 
     const rawStart  = (startSongTime - this.offset) / this.beatInterval;
     const rawEnd    = (endSongTime   - this.offset) / this.beatInterval;
-    const iStart    = Math.max(0, Math.floor(rawStart));
+    const iStart    = Math.floor(rawStart);   // pas de Math.max(0) : on génère aussi les beats avant l'offset
     const iEnd      = Math.ceil(rawEnd);
 
     for (let i = iStart; i <= iEnd; i++) {
       const t = this.offset + i * this.beatInterval;
-      if (t < startSongTime || t > endSongTime) continue;
+      if (t < 0 || t < startSongTime || t > endSongTime) continue;
 
       const bi          = ((i % this.totalBeats) + this.totalBeats) % this.totalBeats;
       const measureIdx  = Math.floor(bi / this.beatsPerMeasure);
