@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TempoMatcher</title>  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">  <link rel="stylesheet" href="style.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">  <link rel="stylesheet" href="style.css?v=6" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
@@ -14,33 +14,48 @@
   <header id="app-header">
     <div id="app-title">
       <span class="title-tempo">TEMPO</span><span class="title-matcher">MATCHER</span>
-      <a href="https://github.com/Lotter-35/TempoMatcher" target="_blank" rel="noopener noreferrer" class="gh-star-btn" title="Voir sur GitHub — donnez une ⭐ si vous aimez !">
+      <a href="https://github.com/Lotter-35/TempoMatcher" target="_blank" rel="noopener noreferrer" class="gh-star-btn" title="Voir sur GitHub — donnez une ⭐ si vous aimez !" data-i18n-title="gh_star_title">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
         <svg class="gh-star-icon" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
         <span>Star</span>
       </a>
     </div>
     <div id="file-info">
-      <span id="save-indicator" title="Données sauvegardées" aria-hidden="true"></span>
-      <button id="btn-reset-song" title="Effacer les données sauvegardées pour ce morceau et repartir à zéro" style="display:none">
+      <span id="save-indicator" title="Données sauvegardées" data-i18n-title="save_indicator_title" aria-hidden="true"></span>
+      <button id="btn-reset-song" title="Effacer les données sauvegardées pour ce morceau et repartir à zéro" data-i18n-title="btn_reset_song_title" style="display:none">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
       </button>
       <span id="file-name">Aucun fichier chargé</span>
-      <button id="btn-load-file" title="Charger un fichier audio">
+      <button id="btn-load-file" title="Charger un fichier audio" data-i18n-title="btn_load_title">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        Charger
+        <span data-i18n="btn_load">Charger</span>
       </button>
       <input type="file" id="file-input" accept="audio/*" style="display:none" />
+      <div class="header-sep"></div>
+      <div id="settings-wrap">
+        <button id="btn-settings" data-i18n-title="settings_title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <div id="settings-popup" class="hidden">
+          <div class="settings-popup-label" data-i18n="settings_lang_label">Langue</div>
+          <div id="lang-switcher">
+            <button class="lang-btn" data-lang="en">EN</button>
+            <button class="lang-btn" data-lang="fr">FR</button>
+            <button class="lang-btn" data-lang="de">DE</button>
+            <button class="lang-btn" data-lang="es">ES</button>
+          </div>
+        </div>
+      </div>
     </div>
   </header>
 
   <!-- ═══════════════════════════ WAVEFORM ═══════════════════════════ -->
   <section id="waveform-section">
     <div id="drop-overlay">
-      <div id="drop-message" style="cursor:pointer" title="Cliquer pour charger un fichier">
+      <div id="drop-message" style="cursor:pointer" title="Cliquer pour charger un fichier" data-i18n-title="drop_click_title">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        <p>Glissez un fichier audio ici</p>
-        <span>ou <strong>cliquez ici</strong> / bouton <strong>Charger</strong></span>
+        <p data-i18n="drop_message">Glissez un fichier audio ici</p>
+        <span data-i18n-html="drop_or_click">ou <strong>cliquez ici</strong> / bouton <strong>Charger</strong></span>
       </div>
     </div>
     <canvas id="waveform-canvas"></canvas>
@@ -50,52 +65,58 @@
 
     <!-- Zoom controls -->
     <div id="zoom-controls">
-      <button id="btn-auto-follow" class="active" title="Auto-recentrage (désactiver)">
+      <button id="btn-auto-follow" title="Auto-recentrage (activer)" data-i18n-title="btn_auto_follow_on">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="3" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="21"/><line x1="3" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="21" y2="12"/></svg>
       </button>
       <div class="zoom-controls-sep"></div>
-      <button id="btn-zoom-out" title="Zoom arrière">
+      <button id="btn-zoom-out" title="Zoom arrière" data-i18n-title="btn_zoom_out">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
       </button>
       <span id="zoom-label">100%</span>
-      <button id="btn-zoom-in" title="Zoom avant">
+      <button id="btn-zoom-in" title="Zoom avant" data-i18n-title="btn_zoom_in">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
       </button>
-      <button id="btn-zoom-fit" title="Tout afficher">FIT</button>
+      <button id="btn-zoom-fit" title="Tout afficher" data-i18n-title="btn_zoom_fit">FIT</button>
       <div class="zoom-controls-sep"></div>
-      <select id="view-mode-select" title="Mode de visualisation" class="view-mode-select">
-        <option value="classic">Classique</option>
-        <option value="spectral">Spectral</option>
+      <select id="view-mode-select" title="Mode de visualisation" data-i18n-title="view_mode_title" class="view-mode-select">
+        <option value="classic" data-i18n="view_classic">Classique</option>
+        <option value="spectral" data-i18n="view_spectral">Spectral</option>
       </select>
     </div>
   </section>
 
   <!-- ═══════════════════════════ RESIZE HANDLE ══════════════════════════ -->
-  <div id="wave-resize-handle" title="Glisser pour redimensionner"></div>
+  <div id="wave-resize-handle" title="Glisser pour redimensionner" data-i18n-title="wave_resize_title"></div>
 
   <!-- ═══════════════════════════ TRANSPORT ═══════════════════════════ -->
   <section id="transport-section">
     <div id="transport-left">
-      <button id="btn-play" class="btn-play" disabled title="Play / Pause">
+      <button id="btn-play" class="btn-play" disabled title="Play / Pause" data-i18n-title="btn_play_title">
         <svg id="icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         <svg id="icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
       </button>
-      <button id="btn-stop" disabled title="Stop">
+      <button id="btn-stop" disabled title="Stop" data-i18n-title="btn_stop_title">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="1"/></svg>
       </button>
-      <button id="btn-loop" disabled class="loop-btn" title="Lecture en boucle">
+      <button id="btn-loop" disabled class="loop-btn" title="Lecture en boucle" data-i18n-title="btn_loop_title">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
       </button>
 
       <div class="transport-sep"></div>
 
-      <button id="btn-export" disabled title="Exporter l'audio" class="btn-export-labeled">
+      <button id="btn-export" disabled title="Exporter l'audio" data-i18n-title="btn_export_title" class="btn-export-labeled">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="7 10 12 15 17 10"/>
           <line x1="12" y1="15" x2="12" y2="3"/>
         </svg>
-        <span class="btn-export-label">EXPORTER</span>
+        <span class="btn-export-label" data-i18n="btn_export">EXPORTER</span>
+      </button>
+      <button id="btn-export-png" disabled title="Exporter la vue en PNG" data-i18n-title="btn_export_png_title">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
       </button>
     </div>
 
@@ -108,10 +129,10 @@
     <div id="transport-right">
       <!-- Outils -->
       <div id="tools-group">
-        <span class="tools-label">OUTILS</span>
+        <span class="tools-label" data-i18n="tools_label">OUTILS</span>
         <div class="tools-row">
-          <div class="tool-btn-wrap" title="Déplacer / naviguer">
-            <button id="btn-tool-pan" class="tool-btn active" title="Outil déplacer / naviguer (H)">
+          <div class="tool-btn-wrap" title="Déplacer / naviguer" data-i18n-title="tool_pan_wrap">
+            <button id="btn-tool-pan" class="tool-btn active" title="Outil déplacer / naviguer (H)" data-i18n-title="tool_pan_title">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/>
                 <line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/>
@@ -119,8 +140,8 @@
             </button>
             <span class="tool-kbd">H</span>
           </div>
-          <div class="tool-btn-wrap" title="Pinceau – colorier par mesure">
-            <button id="btn-brush-toggle" class="tool-btn" title="Outil pinceau – colorier par mesure (B)">
+          <div class="tool-btn-wrap" title="Pinceau – colorier par mesure" data-i18n-title="tool_brush_wrap">
+            <button id="btn-brush-toggle" class="tool-btn" title="Outil pinceau – colorier par mesure (B)" data-i18n-title="tool_brush_title">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M20.5 3.5l-1-1-11 11v2h2l11-11-1-1z"/>
                 <line x1="7.5" y1="13.5" x2="10.5" y2="16.5"/>
@@ -129,7 +150,7 @@
             </button>
             <span class="tool-kbd">B</span>
           </div>
-          <input type="color" id="brush-color-picker" value="#ff8800" title="Couleur du pinceau" />
+          <input type="color" id="brush-color-picker" value="#ff8800" title="Couleur du pinceau" data-i18n-title="brush_color_title" />
         </div>
       </div>
       <div class="transport-sep"></div>
@@ -154,19 +175,19 @@
       </div>
       <input type="range" id="bpm-slider" min="20" max="320" step="0.1" value="120" />
       <div class="bpm-tap-row">
-        <button id="btn-tap" title="Tapper le tempo">TAP</button>
-        <button id="btn-detect" title="Détecter le BPM automatiquement">AUTO-DÉTECT</button>
-        <button id="btn-bpm-half" title="Diviser le BPM par 2">÷2</button>
-        <button id="btn-bpm-double" title="Multiplier le BPM par 2">×2</button>
+        <button id="btn-tap" title="Tapper le tempo" data-i18n-title="tap_title">TAP</button>
+        <button id="btn-detect" title="Détecter le BPM automatiquement" data-i18n-title="auto_detect_title"><span data-i18n="auto_detect">AUTO-DÉTECT</span></button>
+        <button id="btn-bpm-half" title="Diviser le BPM par 2" data-i18n-title="bpm_half_title">÷2</button>
+        <button id="btn-bpm-double" title="Multiplier le BPM par 2" data-i18n-title="bpm_double_title">×2</button>
       </div>
     </div>
 
     <!-- Time signature -->
     <div class="metro-group" id="timesig-group">
-      <div class="metro-group-title">MESURE</div>
+      <div class="metro-group-title" data-i18n="timesig_title">MESURE</div>
       <div class="metro-select-row" style="flex-direction:column;gap:8px;">
         <div class="select-block">
-          <label>Temps par mesure</label>
+          <label data-i18n="beats_per_measure">Temps par mesure</label>
           <div class="seg-btn-group" id="beats-per-measure">
             <button class="seg-btn" data-val="2">2</button>
             <button class="seg-btn" data-val="3">3</button>
@@ -175,7 +196,7 @@
           </div>
         </div>
         <div class="select-block">
-          <label>Mesures par boucle</label>
+          <label data-i18n="measures_per_loop">Mesures par boucle</label>
           <div class="seg-btn-group" id="measures-per-loop">
             <button class="seg-btn" data-val="1">1</button>
             <button class="seg-btn" data-val="2">2</button>
@@ -184,7 +205,7 @@
           </div>
         </div>
         <div class="select-block">
-          <label>Boucles par bande colorée</label>
+          <label data-i18n="loops_per_group">Boucles par bande colorée</label>
           <div class="seg-btn-group" id="loops-per-group">
             <button class="seg-btn" data-val="1">1</button>
             <button class="seg-btn" data-val="2">2</button>
@@ -198,8 +219,8 @@
     <!-- Offset -->
     <div class="metro-group" id="offset-group">
       <div class="metro-group-title-row">
-        <span class="metro-group-title">DÉCALAGE</span>
-        <span id="offset-lock-icon" title="Grille verrouillée sur un pin — déplacer le curseur pour déverrouiller">🔒</span>
+        <span class="metro-group-title" data-i18n="offset_title">DÉCALAGE</span>
+        <span id="offset-lock-icon" title="Grille verrouillée sur un pin — déplacer le curseur pour déverrouiller" data-i18n-title="offset_lock_title">🔒</span>
       </div>
       <div class="metro-row">
         <button class="btn-nudge" id="offset-dec" title="-10ms">−10ms</button>
@@ -210,33 +231,33 @@
         <button class="btn-nudge" id="offset-inc" title="+10ms">+10ms</button>
       </div>
       <input type="range" id="offset-slider" min="-5" max="5" step="0.001" value="0" />
-      <button id="btn-snap-playhead" title="Poser un marqueur sur la tête de lecture et verrouiller la grille dessus">
+      <button id="btn-snap-playhead" title="Poser un marqueur sur la tête de lecture et verrouiller la grille dessus" data-i18n-title="btn_snap_title">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        Caler sur la tête de lecture
+        <span data-i18n="btn_snap">Caler sur la tête de lecture</span>
       </button>
     </div>
 
     <!-- Metronome toggle & volume -->
     <div class="metro-group" id="click-group">
       <div class="metro-group-title-row">
-        <span class="metro-group-title">CLIC</span>
+        <span class="metro-group-title" data-i18n="click_title">CLIC</span>
       </div>
       <div class="click-toggle-row">
-        <button id="btn-metro-toggle" class="toggle-btn active" title="Activer / désactiver le clic">ON</button>
-        <select id="click-profile" class="profile-select" title="Son du clic">
-          <option value="defaut">Défaut</option>
-          <option value="bois">Bois</option>
-          <option value="electro">Électro</option>
-          <option value="doux">Doux</option>
-          <option value="cloche">Cloche</option>
+        <button id="btn-metro-toggle" class="toggle-btn active" title="Activer / désactiver le clic" data-i18n-title="click_toggle_title">ON</button>
+        <select id="click-profile" class="profile-select" title="Son du clic" data-i18n-title="click_profile_title">
+          <option value="defaut" data-i18n="click_defaut">Défaut</option>
+          <option value="bois" data-i18n="click_bois">Bois</option>
+          <option value="electro" data-i18n="click_electro">Électro</option>
+          <option value="doux" data-i18n="click_doux">Doux</option>
+          <option value="cloche" data-i18n="click_cloche">Cloche</option>
         </select>
-        <button id="btn-metro-preview" class="metro-preview-btn" title="Écouter le clic seul">
+        <button id="btn-metro-preview" class="metro-preview-btn" title="Écouter le clic seul" data-i18n-title="metro_preview_title">
           <svg id="metro-preview-icon-play" width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
           <svg id="metro-preview-icon-pause" width="9" height="9" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg>
         </button>
       </div>
       <div class="vol-row">
-        <label class="ctrl-label" for="metro-vol-slider">VOLUME</label>
+        <label class="ctrl-label" for="metro-vol-slider" data-i18n="metro_vol_label">VOLUME</label>
         <span id="metro-vol-pct" class="slider-pct">70%</span>
       </div>
       <input type="range" id="metro-vol-slider" min="0" max="4" step="0.01" value="1" />
@@ -244,10 +265,10 @@
       <!-- Affichage compteur numérique -->
       <div id="metro-counter" class="metro-counter">
         <div class="mc-info-row">
-          <span class="mc-info-label">boucle</span>
+          <span class="mc-info-label" data-i18n="mc_loop_label">boucle</span>
           <span id="mc-loop" class="mc-info-val">&ndash;</span>
           <span class="mc-info-sep">|</span>
-          <span class="mc-info-label">mesure</span>
+          <span class="mc-info-label" data-i18n="mc_measure_label">mesure</span>
           <span id="mc-measure" class="mc-info-val">&ndash;</span>
         </div>
         <div id="mc-beats-row" class="mc-beats-row"></div>
@@ -258,8 +279,8 @@
     <!-- Sections pinceau -->
     <div class="metro-group" id="brush-group">
       <div class="metro-group-title-row">
-        <span class="metro-group-title">SECTIONS</span>
-        <button id="btn-add-section" class="palette-add-btn" title="Ajouter une section">
+        <span class="metro-group-title" data-i18n="sections_title">SECTIONS</span>
+        <button id="btn-add-section" class="palette-add-btn" title="Ajouter une section" data-i18n-title="btn_add_section_title">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
             <line x1="12" y1="4" x2="12" y2="20"/><line x1="4" y1="12" x2="20" y2="12"/>
           </svg>
@@ -271,37 +292,37 @@
     <!-- Visibilité marqueurs -->
     <div class="metro-group" id="markers-group">
       <div class="metro-group-title-row">
-        <span class="metro-group-title">MARQUEURS</span>
-        <button id="btn-add-profile" class="palette-add-btn profile-add-btn" title="Enregistrer ce style comme nouveau profil" disabled>
+        <span class="metro-group-title" data-i18n="markers_title">MARQUEURS</span>
+        <button id="btn-add-profile" class="palette-add-btn profile-add-btn" title="Enregistrer ce style comme nouveau profil" data-i18n-title="btn_add_profile_title" disabled>
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
             <line x1="12" y1="4" x2="12" y2="20"/><line x1="4" y1="12" x2="20" y2="12"/>
           </svg>
         </button>
         <!-- Zone sélecteur (visible par défaut) -->
         <div id="profile-select-wrap" class="profile-ctrls-wrap">
-          <select id="marker-profile" class="profile-select" title="Profil visuel">
-            <option value="defaut">Défaut</option>
-            <option value="nocturne">Nocturne</option>
-            <option value="vif">Vif</option>
-            <option value="pastel">Pastel</option>
-            <option value="mono">Monochrome</option>
-            <option value="personnalise">Personnalisé</option>
+          <select id="marker-profile" class="profile-select" title="Profil visuel" data-i18n-title="profile_title">
+            <option value="defaut" data-i18n="profile_defaut">Défaut</option>
+            <option value="nocturne" data-i18n="profile_nocturne">Nocturne</option>
+            <option value="vif" data-i18n="profile_vif">Vif</option>
+            <option value="pastel" data-i18n="profile_pastel">Pastel</option>
+            <option value="mono" data-i18n="profile_mono">Monochrome</option>
+            <option value="personnalise" data-i18n="profile_custom">Personnalisé</option>
           </select>
-          <button id="btn-del-profile" class="col-reset-btn profile-del-btn" title="Supprimer ce profil" style="display:none">
+          <button id="btn-del-profile" class="col-reset-btn profile-del-btn" title="Supprimer ce profil" data-i18n-title="btn_del_profile_title" style="display:none">
             <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
           </button>
         </div>
         <!-- Zone saisie nom (cachée par défaut) -->
         <div id="profile-name-wrap" class="profile-ctrls-wrap" style="display:none">
-          <input type="text" id="profile-name-input" class="profile-name-input" placeholder="Nom du profil…" maxlength="40" autocomplete="off" spellcheck="false" />
-          <button id="btn-profile-name-ok" class="palette-add-btn profile-name-ok-btn" title="Confirmer (Entrée)">
+          <input type="text" id="profile-name-input" class="profile-name-input" placeholder="Nom du profil…" data-i18n-placeholder="profile_name_ph" maxlength="40" autocomplete="off" spellcheck="false" />
+          <button id="btn-profile-name-ok" class="palette-add-btn profile-name-ok-btn" title="Confirmer (Entrée)" data-i18n-title="profile_ok_title">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </button>
-          <button id="btn-profile-name-cancel" class="col-reset-btn" title="Annuler (Échap)">
+          <button id="btn-profile-name-cancel" class="col-reset-btn" title="Annuler (Échap)" data-i18n-title="profile_cancel_title">
             <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
-        <button id="btn-profile-reset" class="col-reset-btn" title="Réinitialiser le profil">
+        <button id="btn-profile-reset" class="col-reset-btn" title="Réinitialiser le profil" data-i18n-title="profile_reset_title">
           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
         </button>
       </div>
@@ -310,86 +331,86 @@
       <div class="markers-grid">
         <div class="mg-zone mg-zone-btns">
           <div class="mg-header"></div>
-          <button id="btn-show-loop" class="toggle-btn active" title="Afficher / masquer">BOUCLE<span class="btn-switch"></span></button>
-          <button id="btn-show-measure" class="toggle-btn active" title="Afficher / masquer">MESURE<span class="btn-switch"></span></button>
-          <button id="btn-show-beat" class="toggle-btn active" title="Afficher / masquer">TEMPS<span class="btn-switch"></span></button>
-          <button id="btn-show-bands" class="toggle-btn" title="Afficher / masquer les bandes de boucle">BANDES<span class="btn-switch"></span></button>
+          <button id="btn-show-loop" class="toggle-btn active" title="Afficher / masquer" data-i18n-title="show_hide_title"><span data-i18n="marker_loop">BOUCLE</span><span class="btn-switch"></span></button>
+          <button id="btn-show-measure" class="toggle-btn active" title="Afficher / masquer" data-i18n-title="show_hide_title"><span data-i18n="marker_measure">MESURE</span><span class="btn-switch"></span></button>
+          <button id="btn-show-beat" class="toggle-btn active" title="Afficher / masquer" data-i18n-title="show_hide_title"><span data-i18n="marker_beat">TEMPS</span><span class="btn-switch"></span></button>
+          <button id="btn-show-bands" class="toggle-btn" title="Afficher / masquer les bandes de boucle" data-i18n-title="show_hide_title"><span data-i18n="marker_bands">BANDES</span><span class="btn-switch"></span></button>
         </div>
 
         <div class="mg-zone mg-zone-height">
-          <div class="mg-header mch-label">HAUTEUR
-            <button id="btn-reset-heights" class="col-reset-btn" title="Réinitialiser toutes les hauteurs">
+          <div class="mg-header mch-label"><span data-i18n="height_label">HAUTEUR</span>
+            <button id="btn-reset-heights" class="col-reset-btn" title="Réinitialiser toutes les hauteurs" data-i18n-title="reset_heights_title">
               <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </button>
           </div>
           <div class="mg-cell">
-            <input type="range" id="loop-bar-height-slider" min="0" max="1" step="0.01" value="1" title="Hauteur des barres de boucle (double-clic = reset)" class="marker-inline-slider" />
+            <input type="range" id="loop-bar-height-slider" min="0" max="1" step="0.01" value="1" title="Hauteur des barres de boucle (double-clic = reset)" data-i18n-title="height_slider_title" class="marker-inline-slider" />
             <span id="loop-bar-height-pct" class="slider-pct">100%</span>
           </div>
           <div class="mg-cell">
-            <input type="range" id="measure-bar-height-slider" min="0" max="1" step="0.01" value="0.7" title="Hauteur des barres de mesure (double-clic = reset)" class="marker-inline-slider" />
+            <input type="range" id="measure-bar-height-slider" min="0" max="1" step="0.01" value="0.7" title="Hauteur des barres de mesure (double-clic = reset)" data-i18n-title="height_slider_title" class="marker-inline-slider" />
             <span id="measure-bar-height-pct" class="slider-pct">70%</span>
           </div>
           <div class="mg-cell">
-            <input type="range" id="beat-bar-height-slider" min="0" max="1" step="0.01" value="0.05" title="Hauteur des barres de temps (double-clic = reset)" class="marker-inline-slider" />
+            <input type="range" id="beat-bar-height-slider" min="0" max="1" step="0.01" value="0.05" title="Hauteur des barres de temps (double-clic = reset)" data-i18n-title="height_slider_title" class="marker-inline-slider" />
             <span id="beat-bar-height-pct" class="slider-pct">10%</span>
           </div>
           <div class="mg-cell">
-            <input type="range" id="band-height-slider" min="0" max="1" step="0.01" value="1" title="Hauteur des bandes (double-clic = reset)" class="marker-inline-slider" />
+            <input type="range" id="band-height-slider" min="0" max="1" step="0.01" value="1" title="Hauteur des bandes (double-clic = reset)" data-i18n-title="height_slider_title" class="marker-inline-slider" />
             <span id="band-height-pct" class="slider-pct">100%</span>
           </div>
         </div>
         <div class="mg-zone mg-zone-color">
-          <div class="mg-header mch-label">COULEUR
-            <button id="btn-reset-colors" class="col-reset-btn" title="Réinitialiser toutes les couleurs">
+          <div class="mg-header mch-label"><span data-i18n="color_label">COULEUR</span>
+            <button id="btn-reset-colors" class="col-reset-btn" title="Réinitialiser toutes les couleurs" data-i18n-title="reset_colors_title">
               <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </button>
           </div>
           <div class="mg-cell">
-            <input type="color" id="color-loop" value="#ff3355" title="Couleur boucle" />
-            <button class="color-reset-btn" data-target="color-loop" data-default="#ff3355" title="Réinitialiser la couleur">
+            <input type="color" id="color-loop" value="#ff3355" title="Couleur boucle" data-i18n-title="color_loop_title" />
+            <button class="color-reset-btn" data-target="color-loop" data-default="#ff3355" title="Réinitialiser la couleur" data-i18n-title="color_reset_title">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </button>
           </div>
           <div class="mg-cell">
-            <input type="color" id="color-measure" value="#ff8800" title="Couleur mesure" />
-            <button class="color-reset-btn" data-target="color-measure" data-default="#ff8800" title="Réinitialiser la couleur">
+            <input type="color" id="color-measure" value="#ff8800" title="Couleur mesure" data-i18n-title="color_measure_title" />
+            <button class="color-reset-btn" data-target="color-measure" data-default="#ff8800" title="Réinitialiser la couleur" data-i18n-title="color_reset_title">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </button>
           </div>
           <div class="mg-cell">
-            <input type="color" id="color-beat" value="#33dd88" title="Couleur temps" />
-            <button class="color-reset-btn" data-target="color-beat" data-default="#33dd88" title="Réinitialiser la couleur">
+            <input type="color" id="color-beat" value="#33dd88" title="Couleur temps" data-i18n-title="color_beat_title" />
+            <button class="color-reset-btn" data-target="color-beat" data-default="#33dd88" title="Réinitialiser la couleur" data-i18n-title="color_reset_title">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </button>
           </div>
           <div class="mg-cell">
-            <input type="color" id="color-bands" value="#ffffff" title="Couleur des bandes de boucle" />
-            <button class="color-reset-btn" data-target="color-bands" data-default="#ffffff" title="Réinitialiser la couleur">
+            <input type="color" id="color-bands" value="#ffffff" title="Couleur des bandes de boucle" data-i18n-title="color_bands_title" />
+            <button class="color-reset-btn" data-target="color-bands" data-default="#ffffff" title="Réinitialiser la couleur" data-i18n-title="color_reset_title">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </button>
           </div>
         </div>
         <div class="mg-zone mg-zone-opacity">
-          <div class="mg-header mch-label">OPACITÉ
-            <button id="btn-reset-opacities" class="col-reset-btn" title="Réinitialiser toutes les opacités">
+          <div class="mg-header mch-label"><span data-i18n="opacity_label">OPACITÉ</span>
+            <button id="btn-reset-opacities" class="col-reset-btn" title="Réinitialiser toutes les opacités" data-i18n-title="reset_opacities_title">
               <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </button>
           </div>
           <div class="mg-cell">
-            <input type="range" id="loop-opacity-slider" min="0" max="1" step="0.01" value="0.90" class="opacity-inline-slider" title="Opacité (double-clic = reset)" />
+            <input type="range" id="loop-opacity-slider" min="0" max="1" step="0.01" value="0.90" class="opacity-inline-slider" title="Opacité (double-clic = reset)" data-i18n-title="opacity_slider_title" />
             <span id="loop-opacity-pct" class="slider-pct">90%</span>
           </div>
           <div class="mg-cell">
-            <input type="range" id="measure-opacity-slider" min="0" max="1" step="0.01" value="0.75" class="opacity-inline-slider" title="Opacité (double-clic = reset)" />
+            <input type="range" id="measure-opacity-slider" min="0" max="1" step="0.01" value="0.75" class="opacity-inline-slider" title="Opacité (double-clic = reset)" data-i18n-title="opacity_slider_title" />
             <span id="measure-opacity-pct" class="slider-pct">75%</span>
           </div>
           <div class="mg-cell">
-            <input type="range" id="beat-opacity-slider" min="0" max="1" step="0.01" value="0.55" class="opacity-inline-slider" title="Opacité (double-clic = reset)" />
+            <input type="range" id="beat-opacity-slider" min="0" max="1" step="0.01" value="0.55" class="opacity-inline-slider" title="Opacité (double-clic = reset)" data-i18n-title="opacity_slider_title" />
             <span id="beat-opacity-pct" class="slider-pct">55%</span>
           </div>
           <div class="mg-cell">
-            <input type="range" id="band-opacity-slider" min="0" max="1" step="0.01" value="0.07" class="opacity-inline-slider" title="Opacité (double-clic = reset)" />
+            <input type="range" id="band-opacity-slider" min="0" max="1" step="0.01" value="0.07" class="opacity-inline-slider" title="Opacité (double-clic = reset)" data-i18n-title="opacity_slider_title" />
             <span id="band-opacity-pct" class="slider-pct">7%</span>
           </div>
         </div>
@@ -400,25 +421,25 @@
       <!-- Grille 2 : ONDE (extensible) -->
       <div class="markers-grid">
         <div class="mg-zone mg-zone-btns">
-          <button id="btn-show-wave" class="toggle-btn active" title="Afficher / masquer la forme d'onde">ONDE<span class="btn-switch"></span></button>
+          <button id="btn-show-wave" class="toggle-btn active" title="Afficher / masquer la forme d'onde" data-i18n-title="show_hide_wave_title"><span data-i18n="marker_wave">ONDE</span><span class="btn-switch"></span></button>
         </div>
         <div class="mg-zone mg-zone-height">
           <div class="mg-cell">
-            <input type="range" id="amplitude-slider" min="0.05" max="4" step="0.01" value="0.5" title="Amplitude de la forme d'onde (double-clic = reset)" class="marker-inline-slider" />
+            <input type="range" id="amplitude-slider" min="0.05" max="4" step="0.01" value="0.5" title="Amplitude de la forme d'onde (double-clic = reset)" data-i18n-title="amplitude_title" class="marker-inline-slider" />
             <span id="amplitude-pct" class="slider-pct">50%</span>
           </div>
         </div>
         <div class="mg-zone mg-zone-color">
           <div class="mg-cell">
-            <input type="color" id="wave-color-picker" value="#3d8edd" title="Couleur de l'onde" />
-            <button id="wave-color-reset-btn" class="color-reset-btn" title="Réinitialiser la couleur de l'onde">
+            <input type="color" id="wave-color-picker" value="#3d8edd" title="Couleur de l'onde" data-i18n-title="color_wave_title" />
+            <button id="wave-color-reset-btn" class="color-reset-btn" title="Réinitialiser la couleur de l'onde" data-i18n-title="color_reset_title">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </button>
           </div>
         </div>
         <div class="mg-zone mg-zone-opacity">
           <div class="mg-cell">
-            <input type="range" id="wave-opacity-slider" min="0" max="1" step="0.01" value="1" class="opacity-inline-slider" title="Opacité de l'onde (double-clic = reset)" />
+            <input type="range" id="wave-opacity-slider" min="0" max="1" step="0.01" value="1" class="opacity-inline-slider" title="Opacité de l'onde (double-clic = reset)" data-i18n-title="opacity_slider_title" />
             <span id="wave-opacity-pct" class="slider-pct">100%</span>
           </div>
         </div>
@@ -428,7 +449,7 @@
 
     <!-- Volume + VU-mètre -->
     <div class="metro-group" id="volume-group">
-      <div class="metro-group-title">VOLUME</div>
+      <div class="metro-group-title" data-i18n="volume_group">VOLUME</div>
       <div class="vol-panel-inner">
         <div class="vol-slider-wrap">
           <input type="range" id="vol-panel-slider" class="vertical-slider"
@@ -451,13 +472,13 @@
   <!-- Pin popup -->
   <div id="pin-popup" class="hidden">
     <button id="pin-btn-close" title="Fermer">✕</button>
-    <div class="pin-popup-title">MARQUEUR</div>
+    <div class="pin-popup-title" data-i18n="pin_title">MARQUEUR</div>
     <div class="pin-popup-row">
-      <label>Couleur</label>
+      <label data-i18n="pin_color_label">Couleur</label>
       <input type="color" id="pin-color" value="#ffdd00" />
     </div>
     <button id="pin-btn-snap">Caler la grille ici</button>
-    <button id="pin-btn-delete">Supprimer</button>
+    <button id="pin-btn-delete" data-i18n="pin_delete">Supprimer</button>
   </div>
 
   <!-- Menu contextuel règle (clic droit zone vide) -->
@@ -473,7 +494,7 @@
       <div class="exp-header">
         <span class="exp-title">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          Exporter l'audio
+          <span data-i18n="exp_title">Exporter</span>
         </span>
         <button id="exp-btn-close" class="exp-close" title="Fermer">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -488,14 +509,14 @@
 
           <!-- CONTENU -->
           <div class="exp-section">
-            <div class="exp-section-title">CONTENU <span class="exp-section-hint">— un ou plusieurs</span></div>
+            <div class="exp-section-title"><span data-i18n="exp_section_content">CONTENU</span> <span class="exp-section-hint" data-i18n="exp_content_hint">— un ou plusieurs</span></div>
             <label class="exp-option-card">
               <span class="exp-check-icon exp-icon-mix">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
               </span>
               <div class="exp-check-text">
-                <strong>Mixte</strong>
-                <span>Audio + métronome</span>
+                <strong data-i18n="exp_card_mix">Mixte</strong>
+                <span data-i18n="exp_card_mix_sub">Audio + métronome</span>
               </div>
               <input type="checkbox" id="exp-chk-mix" checked />
             </label>
@@ -504,8 +525,8 @@
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><circle cx="12" cy="16" r="0.6" fill="currentColor"/></svg>
               </span>
               <div class="exp-check-text">
-                <strong>Métronome seul</strong>
-                <span>Clic sans musique</span>
+                <strong data-i18n="exp_card_metro">Métronome seul</strong>
+                <span data-i18n="exp_card_metro_sub">Clic sans musique</span>
               </div>
               <input type="checkbox" id="exp-chk-metro" />
             </label>
@@ -514,8 +535,8 @@
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
               </span>
               <div class="exp-check-text">
-                <strong>Audio seul</strong>
-                <span>La musique au volume réglé</span>
+                <strong data-i18n="exp_card_audio">Audio seul</strong>
+                <span data-i18n="exp_card_audio_sub">La musique au volume réglé</span>
               </div>
               <input type="checkbox" id="exp-chk-audio" />
             </label>
@@ -525,7 +546,7 @@
 
           <!-- FORMAT + OPTIONS compacts -->
           <div class="exp-section">
-            <div class="exp-section-title">FORMAT &amp; OPTIONS</div>
+            <div class="exp-section-title" data-i18n="exp_section_format">FORMAT &amp; OPTIONS</div>
             <div class="exp-fmt-row">
               <div class="exp-fmt-seg">
                 <label class="exp-fmt-pill">
@@ -539,26 +560,54 @@
               </div>
               <label class="exp-tags-toggle">
                 <input type="checkbox" id="exp-chk-tags" checked />
-                <span class="exp-tags-label-txt">Tags</span>
+                <span class="exp-tags-label-txt" data-i18n="exp_tags_label">Tags</span>
                 <span class="exp-tags-state" id="exp-tags-state">ON</span>
               </label>
             </div>
           </div>
 
-        </div>
+          <hr class="exp-divider" />
 
-        <!-- Colonne droite : nom + prévisualisation -->
+          <!-- MARQUEURS PREMIERE PRO -->
+          <div class="exp-section">
+            <div class="exp-section-title" data-i18n="exp_section_premiere">MARQUEURS PREMIERE PRO</div>
+            <label class="exp-option-card">
+              <span class="exp-check-icon exp-icon-xml">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              </span>
+              <div class="exp-check-text">
+                <strong data-i18n="exp_card_xml">XML Premiere Pro</strong>
+                <span data-i18n="exp_card_xml_sub">Séquence XML avec marqueurs beat</span>
+              </div>
+              <input type="checkbox" id="exp-chk-xml" />
+            </label>
+            <div class="exp-xml-fps-row" id="exp-xml-fps-row" style="display:none">
+              <span class="exp-xml-fps-label" data-i18n="exp_fps_label">FPS projet</span>
+              <select id="exp-xml-fps">
+                <option value="23.976">23.976</option>
+                <option value="24">24</option>
+                <option value="25">25</option>
+                <option value="29.97">29.97</option>
+                <option value="30">30</option>
+                <option value="50">50</option>
+                <option value="59.94">59.94</option>
+                <option value="60" selected>60</option>
+              </select>
+            </div>
+          </div>
+
+        </div>
         <div class="exp-col-name">
           <div class="exp-section">
-            <div class="exp-section-title">NOM DU FICHIER</div>
+            <div class="exp-section-title" data-i18n="exp_section_filename">NOM DU FICHIER</div>
             <div class="exp-name-wrap">
-              <input type="text" id="exp-name-input" class="exp-name-input" placeholder="nom-de-base" />
-              <span class="exp-name-hint">Le suffixe et l’extension sont ajoutés automatiquement</span>
+              <input type="text" id="exp-name-input" class="exp-name-input" placeholder="nom-de-base" data-i18n-placeholder="exp_name_ph" />
+              <span class="exp-name-hint" data-i18n="exp_name_hint">Le suffixe et l'extension sont ajoutés automatiquement</span>
             </div>
           </div>
 
           <div class="exp-section exp-section--preview">
-            <div class="exp-section-title">FICHIERS GÉNÉRÉS</div>
+            <div class="exp-section-title" data-i18n="exp_section_files">FICHIERS GÉNÉRÉS</div>
             <ul id="exp-preview-list" class="exp-preview-list">
               <li class="exp-preview-empty">Sélectionnez au moins un contenu</li>
             </ul>
@@ -577,13 +626,14 @@
         </div>
         <button id="exp-btn-download" class="exp-btn-download" disabled>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <span id="exp-btn-label">Télécharger</span>
+          <span id="exp-btn-label" data-i18n="exp_btn_download">Télécharger</span>
         </button>
       </div>
 
     </div>
   </div>
 
+  <script src="js/i18n.js"></script>
   <script src="js/metronome.js"></script>
   <script src="js/waveform.js"></script>
   <script src="js/audio.js"></script>

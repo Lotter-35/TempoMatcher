@@ -132,6 +132,9 @@ document.addEventListener('wheel', function(e) {
 
   const $  = id => document.getElementById(id);
 
+  // Initialiser la langue (applique les traductions sur tous les [data-i18n])
+  i18n.init();
+
   const dropOverlay    = $('drop-overlay');
   const fileInput      = $('file-input');
   const btnLoad        = $('btn-load-file');
@@ -144,6 +147,9 @@ document.addEventListener('wheel', function(e) {
   const btnStop        = $('btn-stop');
   const btnLoop        = $('btn-loop');
   const btnExport      = $('btn-export');
+  const btnExportPng   = $('btn-export-png');
+  const btnExportXml   = $('btn-export-xml');  // null (bouton retiré du transport)
+  const xmlFpsSelect   = $('xml-fps-select');   // null (déplacé dans le modal)
   const iconPlay       = $('icon-play');
   const iconPause      = $('icon-pause');
   const timeCurrent    = $('time-current');
@@ -420,11 +426,51 @@ document.addEventListener('wheel', function(e) {
     loadingOverlay.classList.remove('visible');
   }
 
+  // Texte initial "Aucun fichier chargé" dans la langue active
+  fileName.textContent = i18n.t('no_file_loaded');
+
+  // Callback langue : mise à jour des éléments gérés dynamiquement par JS
+  i18n.onLangChange(() => {
+    if (!_loadedFileName) fileName.textContent = i18n.t('no_file_loaded');
+    // Titre auto-follow (dépend de l'état courant)
+    btnAutoFollow.title = waveform.autoFollow
+      ? i18n.t('btn_auto_follow_off')
+      : i18n.t('btn_auto_follow_on');
+    // Titre outil pinceau (dépend du mode spectral)
+    const isSpectral = $('view-mode-select')?.value === 'spectral';
+    btnBrushToggle.title = isSpectral ? i18n.t('tool_brush_spectral') : i18n.t('tool_brush_title');
+    // Bouton snap-pin popup (si ouvert)
+    if (typeof _activePinIdx !== 'undefined' && _activePinIdx >= 0
+        && pinPopup && !pinPopup.classList.contains('hidden')) {
+      const isLocked = (_lockedPinIdx === _activePinIdx);
+      pinBtnSnap.textContent = isLocked ? i18n.t('pin_snap_unlock') : i18n.t('pin_snap');
+    }
+    // Réafficher la palette sections (contient des titles traduits)
+    renderBrushPalette();
+    // Redessiner le canvas (étiquettes DEBUT/FIN et préfixes B/M changent avec la langue)
+    waveform.markDirty();
+    // Recalculer la largeur du panneau volume :
+    // injectHandles() fige les largeurs en inline style → effacer puis re-geler
+    // après que le navigateur a calculé la nouvelle taille max-content du titre.
+    const volGroup = $('volume-group');
+    if (volGroup) {
+      volGroup.style.removeProperty('width');
+      requestAnimationFrame(() => {
+        const w = volGroup.offsetWidth;
+        volGroup.style.width = w + 'px';
+        volGroup.dataset.initWidth = w;
+      });
+    }
+  });
+
   function setTransportEnabled(on) {
     btnPlay.disabled   = !on;
     btnStop.disabled   = !on;
     btnLoop.disabled   = !on;
-    btnExport.disabled = !on;
+    btnExport.disabled    = !on;
+    btnExportPng.disabled = !on;
+    if (btnExportXml) btnExportXml.disabled = !on;
+    if (xmlFpsSelect) xmlFpsSelect.disabled = !on;
   }
 
   function updatePlayIcons() {
@@ -497,6 +543,20 @@ document.addEventListener('wheel', function(e) {
     offsetGroup.classList.remove('locked');
     applyProfile('defaut');
     markerProfileSelect.value = 'defaut';
+
+    // Réinitialiser la visibilité des marqueurs aux valeurs par défaut
+    for (const [prop, btn, def] of [
+      ['showLoopMarkers',    btnShowLoop,    true],
+      ['showMeasureMarkers', btnShowMeasure, true],
+      ['showBeatMarkers',    btnShowBeat,    true],
+      ['showLoopBands',      btnShowBands,   false],
+      ['showWaveform',       btnShowWave,    true],
+    ]) {
+      waveform[prop] = def;
+      btn.classList.toggle('active', def);
+      btn.classList.toggle('off',   !def);
+    }
+
     renderBrushPalette();
     waveform.markDirty();
     _restoringData = false;
@@ -504,7 +564,7 @@ document.addEventListener('wheel', function(e) {
     // Masquer le bouton reset, lancer l'auto-détect
     btnResetSong.style.display = 'none';
     btnDetect.disabled = true;
-    showLoading('Détection BPM…', 0.95);
+    showLoading(i18n.t('loading_bpm'), 0.95);
     detectBPM(audio.audioBuffer)
       .then(bpm => setBPM(bpm))
       .catch(() => {})
@@ -535,6 +595,13 @@ document.addEventListener('wheel', function(e) {
       lockedPinTime: _lockedPinIdx >= 0 && _lockedPinIdx < waveform.pins.length
                        ? waveform.pins[_lockedPinIdx].time
                        : null,
+      visibility: {
+        loop:    waveform.showLoopMarkers,
+        measure: waveform.showMeasureMarkers,
+        beat:    waveform.showBeatMarkers,
+        bands:   waveform.showLoopBands,
+        wave:    waveform.showWaveform,
+      },
       markerProfile: markerProfileSelect.value !== 'personnalise' ? markerProfileSelect.value : null,
       markerParams: {
         loopColor:     waveform.markerColorLoop,
@@ -631,6 +698,20 @@ document.addEventListener('wheel', function(e) {
       applyProfile('defaut');
       markerProfileSelect.value = 'defaut';
     }
+    // 9. Visibilité des marqueurs (avec valeurs par défaut si absent)
+    const vis = data.visibility || {};
+    const _setVis = (prop, visKey, btn, def) => {
+      const v = vis[visKey] != null ? vis[visKey] : def;
+      waveform[prop] = v;
+      btn.classList.toggle('active', v);
+      btn.classList.toggle('off',   !v);
+    };
+    _setVis('showLoopMarkers',    'loop',    btnShowLoop,    true);
+    _setVis('showMeasureMarkers', 'measure', btnShowMeasure, true);
+    _setVis('showBeatMarkers',    'beat',    btnShowBeat,    true);
+    _setVis('showLoopBands',      'bands',   btnShowBands,   false);
+    _setVis('showWaveform',       'wave',    btnShowWave,    true);
+
     renderBrushPalette();
     waveform.markDirty();
     _restoringData = false;
@@ -641,7 +722,7 @@ document.addEventListener('wheel', function(e) {
 
   async function loadAudioFile(file) {
     if (!file || !file.type.startsWith('audio/') && !/\.(mp3|wav|ogg|flac|aac|m4a)$/i.test(file.name)) {
-      alert('Format non supporté. Utilisez MP3, WAV, OGG, FLAC ou AAC.');
+      alert(i18n.t('alert_format'));
       return;
     }
 
@@ -656,10 +737,10 @@ document.addEventListener('wheel', function(e) {
     resetMetroCounter();
     waveform.markDirty();
 
-    showLoading('Chargement…', 0);
+    showLoading(i18n.t('loading_decoding'), 0);
 
     audio.onLoading = p => {
-      showLoading(p < 0.5 ? 'Lecture du fichier…' : 'Décodage audio…', p);
+      showLoading(p < 0.5 ? i18n.t('loading_reading') : i18n.t('loading_decoding'), p);
       loadingBar.style.width = (p * 100) + '%';
     };
 
@@ -696,13 +777,26 @@ document.addEventListener('wheel', function(e) {
       _restoreSongData(_savedSong);
     } else {
       btnResetSong.style.display = 'none';
+      // Morceau inconnu : appliquer les visibilités par défaut
+      const _defVis = [
+        ['showLoopMarkers',    btnShowLoop,    true],
+        ['showMeasureMarkers', btnShowMeasure, true],
+        ['showBeatMarkers',    btnShowBeat,    true],
+        ['showLoopBands',      btnShowBands,   false],
+        ['showWaveform',       btnShowWave,    true],
+      ];
+      for (const [prop, btn, def] of _defVis) {
+        waveform[prop] = def;
+        btn.classList.toggle('active', def);
+        btn.classList.toggle('off',   !def);
+      }
       renderBrushPalette(); // Afficher la palette vide
     }
 
     // Auto-détection BPM uniquement si aucun BPM sauvegardé pour cette piste
     if (!_savedSong?.bpm) {
       btnDetect.disabled = true;
-      showLoading('Détection BPM…', 0.95);
+      showLoading(i18n.t('loading_bpm'), 0.95);
       try {
         const detectedBPM = await detectBPM(audio.audioBuffer);
         setBPM(detectedBPM);
@@ -806,8 +900,15 @@ document.addEventListener('wheel', function(e) {
     if (wasPlaying && info) {
       metro.start(audio.audioContext, info.audioStartTime, info.playbackStartPos);
     } else if (!wasPlaying && !_previewActive) {
-      // Ne couper le métronome que si le preview n'est pas actif
-      metro.stop();
+      if (_spaceSeekActive) {
+        // Mode space-seek : lancer la lecture depuis la position cliquée
+        const playInfo = audio.play();
+        if (playInfo) metro.start(audio.audioContext, playInfo.audioStartTime, playInfo.playbackStartPos);
+        updatePlayIcons();
+      } else {
+        // Ne couper le métronome que si le preview n'est pas actif
+        metro.stop();
+      }
     }
     // Ne mettre à jour le compteur depuis la position que si le preview n'est pas actif
     if (!_previewActive) updateCounterFromPosition(time);
@@ -859,8 +960,8 @@ document.addEventListener('wheel', function(e) {
     waveform.autoFollow = !waveform.autoFollow;
     btnAutoFollow.classList.toggle('active', waveform.autoFollow);
     btnAutoFollow.title = waveform.autoFollow
-      ? 'Auto-recentrage (désactiver)'
-      : 'Auto-recentrage (activer)';
+      ? i18n.t('btn_auto_follow_off')
+      : i18n.t('btn_auto_follow_on');
   });
 
   /* ══ Mode de visualisation ══════════════════════════════════════════════ */
@@ -872,10 +973,10 @@ document.addEventListener('wheel', function(e) {
       if (viewModeSelect.value === 'spectral') {
         deactivateBrush();
         btnBrushToggle.disabled = true;
-        btnBrushToggle.title    = 'Non disponible en mode Spectral';
+        btnBrushToggle.title    = i18n.t('tool_brush_spectral');
       } else {
         btnBrushToggle.disabled = false;
-        btnBrushToggle.title    = 'Outil pinceau – colorier par mesure (B)';
+        btnBrushToggle.title    = i18n.t('tool_brush_title');
       }
       waveform.markDirty();
     });
@@ -1093,6 +1194,7 @@ document.addEventListener('wheel', function(e) {
     waveform.showWaveform = !waveform.showWaveform;
     btnShowWave.classList.toggle('active', waveform.showWaveform);
     waveform.markDirty();
+    _saveSongData();
   });
 
   measureBarHeightSlider.addEventListener('input', () => {
@@ -1190,6 +1292,9 @@ document.addEventListener('wheel', function(e) {
   const _brushHistory = [];
   const _brushFuture  = [];
   const BRUSH_HISTORY_MAX = 80;
+  let _spaceSeekActive  = false;  // espace maintenu en mode pinceau → seek temporaire
+  let _spacePressTime   = 0;       // timestamp du keydown Space
+  const SPACE_HOLD_DELAY = 100;    // ms : en dessous → pression courte (play/pause)
 
   function _captureBrushState() {
     return {
@@ -1290,7 +1395,7 @@ document.addEventListener('wheel', function(e) {
     if (waveform.brushPalette.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'palette-empty';
-      empty.textContent = 'Peignez ou appuyez sur + pour créer une section';
+      empty.textContent = i18n.t('empty_sections');
       list.appendChild(empty);
       return;
     }
@@ -1351,7 +1456,7 @@ document.addEventListener('wheel', function(e) {
       swatch.className = 'palette-swatch';
       swatch.style.background = entry.color;
       swatch.style.borderColor = entry.color;
-      swatch.title = 'Prendre cette couleur et activer le pinceau';
+      swatch.title = i18n.t('section_pick_title');
 
       // Icône pipette — toujours visible (overlay semi-transparent)
       const pipette = document.createElement('span');
@@ -1378,7 +1483,7 @@ document.addEventListener('wheel', function(e) {
       const nameSpan = document.createElement('span');
       nameSpan.className   = 'palette-name';
       nameSpan.textContent = entry.name;
-      nameSpan.title       = 'Cliquer pour renommer';
+      nameSpan.title       = i18n.t('section_rename_title');
 
       nameSpan.addEventListener('click', () => {
         const input = document.createElement('input');
@@ -1410,7 +1515,7 @@ document.addEventListener('wheel', function(e) {
       // ── Bouton édition couleur (icône crayon, visible au survol) ──
       const editBtn = document.createElement('button');
       editBtn.className = 'palette-edit-btn';
-      editBtn.title     = 'Modifier la couleur de cette section';
+      editBtn.title     = i18n.t('section_edit_title');
       editBtn.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none"
         stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
@@ -1474,7 +1579,7 @@ document.addEventListener('wheel', function(e) {
       // ── Bouton supprimer (icône corbeille, visible au survol) ──
       const delBtn = document.createElement('button');
       delBtn.className = 'palette-del-btn';
-      delBtn.title     = 'Supprimer cette section';
+      delBtn.title     = i18n.t('section_delete_title');
       delBtn.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none"
         stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="3 6 5 6 21 6"/>
@@ -1526,6 +1631,7 @@ document.addEventListener('wheel', function(e) {
       btn.classList.toggle('active', waveform[prop]);
       btn.classList.toggle('off',   !waveform[prop]);
       waveform.markDirty();
+      _saveSongData();
     });
   }
 
@@ -1680,7 +1786,7 @@ document.addEventListener('wheel', function(e) {
     waveform.lockedPinTime = null;
     offsetGroup.classList.remove('locked');
     if (_activePinIdx >= 0) {
-      pinBtnSnap.textContent = 'Caler la grille ici';
+      pinBtnSnap.textContent = i18n.t('pin_snap');
       pinBtnSnap.classList.remove('locked');
     }
   }
@@ -1704,7 +1810,7 @@ document.addEventListener('wheel', function(e) {
 
     // Mettre à jour l'état du bouton verrou
     const isLocked = (_lockedPinIdx === idx);
-    pinBtnSnap.textContent = isLocked ? '🔒 Déverrouiller la grille' : 'Caler la grille ici';
+    pinBtnSnap.textContent = isLocked ? i18n.t('pin_snap_unlock') : i18n.t('pin_snap');
     pinBtnSnap.classList.toggle('locked', isLocked);
     offsetGroup.classList.toggle('locked', isLocked);
 
@@ -1869,8 +1975,8 @@ document.addEventListener('wheel', function(e) {
     if (waveform.pins.length > 0) {
       const hasLock = _lockedPinIdx >= 0 && _lockedPinIdx < waveform.pins.length;
       rulerCtxDeleteAll.textContent = hasLock
-        ? 'Supprimer tous les marqueurs (sauf le verrou)'
-        : 'Supprimer tous les marqueurs';
+        ? i18n.t('delete_all_no_lock')
+        : i18n.t('delete_all_markers');
       showRulerCtxMenu(sx, sy);
     }
   };
@@ -1983,19 +2089,47 @@ document.addEventListener('wheel', function(e) {
 
   /* ══ Resize waveform section ═══════════════════════════════════ */
 
-  const waveSection   = document.getElementById('waveform-section');
-  const resizeHandle  = document.getElementById('wave-resize-handle');
-  const MIN_WAVE_H    = 60;
-  const MAX_WAVE_H    = 600;
-  const WAVE_H_KEY    = 'tempomatcher_wave_height';
+  const waveSection      = document.getElementById('waveform-section');
+  const resizeHandle     = document.getElementById('wave-resize-handle');
+  const appHeader        = document.getElementById('app-header');
+  const transportSection = document.getElementById('transport-section');
+  const metroSection     = document.getElementById('metronome-section');
+  const MIN_WAVE_H       = 60;
+  const MAX_WAVE_H       = 600;
+  const WAVE_H_KEY       = 'tempomatcher_wave_height';
 
-  // Restaurer la hauteur sauvegardée de la waveform
+  // Hauteur naturelle du panneau bas mesurée UNE SEULE FOIS avant tout resize.
+  // On supprime temporairement l'étirement flex (align-items: stretch) pour mesurer
+  // la vraie hauteur du contenu, sans l'espace vide que flex: 1 1 0 ajoute.
+  const _metroNatH = (() => {
+    if (!metroSection) return 200;
+    const saved = metroSection.style.alignItems;
+    metroSection.style.alignItems = 'flex-start';
+    const groups = [...metroSection.querySelectorAll(':scope > .metro-group')];
+    const maxH = groups.reduce((m, g) => Math.max(m, g.offsetHeight), 0);
+    metroSection.style.alignItems = saved;
+    return maxH || metroSection.offsetHeight;
+  })();
+
+  /** Hauteur max de la waveform = espace dispo moins la hauteur naturelle du panneau bas. */
+  function _maxWaveH() {
+    const bodyH  = document.body.clientHeight;
+    const fixedH = (appHeader        ? appHeader.offsetHeight        : 0)
+                 + (resizeHandle     ? resizeHandle.offsetHeight     : 4)
+                 + (transportSection ? transportSection.offsetHeight : 0);
+    return Math.max(MIN_WAVE_H, Math.min(MAX_WAVE_H, bodyH - fixedH - _metroNatH));
+  }
+
+  // Restaurer la hauteur sauvegardée, ou mettre la waveform au maximum par défaut
   (function _restoreWaveHeight() {
     const saved = parseInt(localStorage.getItem(WAVE_H_KEY), 10);
-    if (saved >= MIN_WAVE_H && saved <= MAX_WAVE_H) {
-      waveSection.style.flex   = `0 0 ${saved}px`;
-      waveSection.style.height = saved + 'px';
-    }
+    requestAnimationFrame(() => {
+      const h = (saved >= MIN_WAVE_H && saved <= MAX_WAVE_H)
+        ? Math.min(saved, _maxWaveH())
+        : _maxWaveH(); // par défaut : waveform au max, panneau bas au minimum
+      waveSection.style.flex   = `0 0 ${h}px`;
+      waveSection.style.height = h + 'px';
+    });
   })();
 
   let _resizing      = false;
@@ -2019,7 +2153,7 @@ document.addEventListener('wheel', function(e) {
   document.addEventListener('mousemove', e => {
     if (!_resizing) return;
     const dy   = e.clientY - _resizeStartY;
-    const newH = Math.max(MIN_WAVE_H, Math.min(MAX_WAVE_H, _resizeStartH + dy));
+    const newH = Math.max(MIN_WAVE_H, Math.min(_maxWaveH(), _resizeStartH + dy));
     // Désactiver flex grow/shrink pour que height soit respecté
     waveSection.style.flex   = `0 0 ${newH}px`;
     waveSection.style.height = newH + 'px';
@@ -2484,7 +2618,19 @@ document.addEventListener('wheel', function(e) {
     switch (e.code) {
       case 'Space':
         e.preventDefault();
-        btnPlay.click();
+        if (e.repeat) break;  // ignorer l'autorepeat
+        if (waveform.paintBrushMode) {
+          // Activation immédiate du mode seek
+          _spaceSeekActive = true;
+          _spacePressTime  = performance.now();
+          waveform.paintBrushMode = false;
+          waveform._brushPainting = false;
+          waveform.hideBrushCursor();
+          waveform.spaceSeekMode = true;
+          waveform.waveCanvas.style.cursor = 'crosshair';
+        } else if (!_spaceSeekActive) {
+          btnPlay.click();
+        }
         break;
       case 'KeyS':
         btnStop.click();
@@ -2519,6 +2665,20 @@ document.addEventListener('wheel', function(e) {
           waveform.onSeek(t);
         }
         break;
+    }
+  });
+
+  document.addEventListener('keyup', e => {
+    if (e.code !== 'Space' || !_spaceSeekActive) return;
+    _spaceSeekActive = false;
+    // Retour pinceau dans tous les cas
+    waveform.paintBrushMode    = true;
+    waveform.spaceSeekMode     = false;
+    waveform._spaceSeekCursorX = null;
+    waveform.waveCanvas.style.cursor = `url("${BRUSH_CURSOR_URL}") 0 24, crosshair`;
+    // Pression courte (< SPACE_HOLD_DELAY) → aussi play/pause
+    if (performance.now() - _spacePressTime < SPACE_HOLD_DELAY) {
+      btnPlay.click();
     }
   });
 
@@ -2569,7 +2729,7 @@ document.addEventListener('wheel', function(e) {
         zone.className = 'panel-top-hover';
         const grip = document.createElement('div');
         grip.className = 'panel-drag-grip';
-        grip.title = 'Glisser pour réordonner';
+        grip.title = i18n.t('section_grip_title');
         grip.innerHTML = `<svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="2.5" cy="2.5" r="1.4"/><circle cx="7.5" cy="2.5" r="1.4"/><circle cx="2.5" cy="7" r="1.4"/><circle cx="7.5" cy="7" r="1.4"/><circle cx="2.5" cy="11.5" r="1.4"/><circle cx="7.5" cy="11.5" r="1.4"/></svg>`;
         zone.appendChild(grip);
         group.insertBefore(zone, group.firstChild);
@@ -2840,6 +3000,129 @@ document.addEventListener('wheel', function(e) {
 
   // ── Export ──────────────────────────────────────────────────────
   ExportManager.init();
+
+  btnExportPng.addEventListener('click', () => {
+    if (!audio.audioBuffer) return;
+
+    // ── Sauvegarder l'état actuel ──
+    const savedZoom        = waveform.zoom;
+    const savedScroll      = waveform.scrollTime;
+    const savedExportMode  = waveform.exportMode;
+    const savedShowLoop    = waveform.showLoopMarkers;
+    const savedShowMeasure = waveform.showMeasureMarkers;
+    const savedShowBeat    = waveform.showBeatMarkers;
+    const savedShowBands   = waveform.showLoopBands;
+
+    // ── Appliquer le mode export ──
+    waveform.zoomFit();
+    waveform.exportMode         = true;
+    waveform.exportScale        = 2;      // textes, traits, pins × 2 pour le rendu 4K
+    waveform.showLoopMarkers    = true;   // traits rouges de boucle visibles
+    waveform.showMeasureMarkers = false;
+    waveform.showBeatMarkers    = false;
+    waveform.showLoopBands      = false;  // bandes blanches masquées
+
+    // Capturer — rendu fixe 16:9 au double de la résolution écran (ex: 3840×2160)
+    // Indépendant de la taille de la fenêtre ou du canvas affiché
+    const tgtW  = window.screen.width * 2;          // ex: 3840
+    const tgtH  = Math.round(tgtW * 9 / 16 * 0.8); // 16:9 - 20% hauteur
+    const tgtHr = 48;                                // règle : 24px × 2 (densité ×2)
+    const tgtHw = tgtH - tgtHr;
+
+    // Canvases offscreen à la résolution cible
+    const offWave  = document.createElement('canvas');
+    const offRuler = document.createElement('canvas');
+    offWave.width  = tgtW; offWave.height  = tgtHw;
+    offRuler.width = tgtW; offRuler.height = tgtHr;
+
+    // Swap temporaire des canvases dans le renderer
+    const origWave  = waveform.waveCanvas;
+    const origRuler = waveform.rulerCanvas;
+    const origWctx  = waveform.wctx;
+    const origRctx  = waveform.rctx;
+    waveform.waveCanvas  = offWave;
+    waveform.rulerCanvas = offRuler;
+    waveform.wctx        = offWave.getContext('2d');
+    waveform.rctx        = offRuler.getContext('2d');
+
+    // Rendu dans les canvases offscreen
+    waveform._draw();
+
+    // Restaurer les canvases originaux
+    waveform.waveCanvas  = origWave;
+    waveform.rulerCanvas = origRuler;
+    waveform.wctx        = origWctx;
+    waveform.rctx        = origRctx;
+
+    // Composer le PNG final
+    const composed = document.createElement('canvas');
+    composed.width  = tgtW;
+    composed.height = tgtHw + tgtHr;
+    const ctx2 = composed.getContext('2d');
+    ctx2.fillStyle = '#0d0d0d';
+    ctx2.fillRect(0, 0, tgtW, tgtHw + tgtHr);
+    ctx2.drawImage(offWave,  0,    0);
+    ctx2.drawImage(offRuler, 0, tgtHw);
+
+    // ── Overlay info musique – coin supérieur gauche ──
+    {
+      const songName = (_loadedFileName || '').replace(/\.[^.]+$/, '');
+      const bpm      = metro.bpm != null ? Number(metro.bpm).toFixed(2) : '—';
+      const offset   = metro.offset != null ? Number(metro.offset).toFixed(3) + 's' : '—';
+      const details  = [
+        `BPM : ${bpm}`,
+        `Décalage : ${offset}`,
+        `Temps / mesure : ${metro.beatsPerMeasure}`,
+        `Mesures / boucle : ${metro.measuresPerLoop}`,
+      ];
+
+      const pad     = 48;
+      const titleH  = 50;
+      const detailH = 36;
+      const gap     = 10;
+
+      ctx2.save();
+      ctx2.shadowColor   = 'rgba(0,0,0,0.9)';
+      ctx2.shadowBlur    = 12;
+      ctx2.shadowOffsetX = 2;
+      ctx2.shadowOffsetY = 2;
+      ctx2.fillStyle     = '#ffffff';
+      ctx2.textBaseline  = 'top';
+
+      ctx2.font = 'bold 45px sans-serif';
+      ctx2.fillText(songName, pad, pad);
+
+      ctx2.font = '31px sans-serif';
+      details.forEach((line, i) => {
+        ctx2.fillText(line, pad, pad + titleH + gap + i * detailH);
+      });
+
+      ctx2.restore();
+    }
+
+    // ── Restaurer l'état ──
+    waveform.exportMode         = savedExportMode;
+    waveform.exportScale        = 1;
+    waveform.showLoopMarkers    = savedShowLoop;
+    waveform.showMeasureMarkers = savedShowMeasure;
+    waveform.showBeatMarkers    = savedShowBeat;
+    waveform.showLoopBands      = savedShowBands;
+    waveform.zoom               = savedZoom;
+    waveform.scrollTime         = savedScroll;
+    waveform._clampScroll();
+    waveform.markDirty();
+
+    // Télécharger
+    composed.toBlob(blob => {
+      const base = (_loadedFileName || 'export').replace(/\.[^.]+$/, '');
+      const url  = URL.createObjectURL(blob);
+      const a    = Object.assign(document.createElement('a'), { href: url, download: base + '-waveform.png' });
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+    }, 'image/png');
+  });
 
   btnExport.addEventListener('click', () => {
     if (!audio.audioBuffer) return;

@@ -34,7 +34,7 @@ class WaveformRenderer {
     // Playhead
     this.playheadTime  = 0;
     this.isPlaying     = false;
-    this.autoFollow    = true;   // auto-scroll actif par défaut
+    this.autoFollow    = false;  // auto-scroll désactivé par défaut
 
     // Callbacks
     this.onSeek           = null;  // fn(time)
@@ -93,6 +93,15 @@ class WaveformRenderer {
     this._brushPainting    = false;
     this._brushErasing     = false;
     this._lastBrushX       = null;   // interpolation entre events mousemove
+
+    // Mode seek temporaire (espace maintenu en mode pinceau)
+    this.spaceSeekMode     = false;
+    this._spaceSeekCursorX = null;
+
+    // Mode export PNG : masque playhead, click marker, marqueurs de battement/mesure/boucle
+    this.exportMode  = false;
+    // Facteur de mise à l'échelle pour l'export (textes, traits, pins) — 1 = normal, 2 = 4K
+    this.exportScale = 1;
 
     // Curseur pinceau : div absolu mis à jour directement dans mousemove (pas de rAF = zéro latence)
     this._brushCursorEl = document.createElement('div');
@@ -219,7 +228,7 @@ class WaveformRenderer {
 
     // Nombre cible de pics : 4× la largeur canvas
     // => bonne résolution à forte zoom
-    const TARGET = Math.min(totalSamples, this._dpr() * this.waveCanvas.clientWidth * 8);
+    const TARGET = Math.min(totalSamples, this._cW() * 8);
     const step   = Math.max(1, Math.floor(totalSamples / TARGET));
     const count  = Math.ceil(totalSamples / step);
 
@@ -405,7 +414,7 @@ class WaveformRenderer {
   }
 
   get pixelsPerSecond() {
-    return (this.waveCanvas.clientWidth || 1) / this.visibleDuration;
+    return (this._cW() || 1) / this.visibleDuration;
   }
 
   timeToX(time) {
@@ -453,19 +462,21 @@ class WaveformRenderer {
   followPlayhead() {
     if (!this.autoFollow) return;
     if (!this.isPlaying) return;
-    if (this.zoom < 2.5) return; // pas d'auto-scroll en dessous de 250%
+    // Auto-follow actif uniquement si la durée visible est ≤ au seuil configurable
+    // Modifier AUTO_FOLLOW_MAX_VISIBLE_SEC pour changer le seuil
+    const AUTO_FOLLOW_MAX_VISIBLE_SEC = 2; // secondes
+    if (this.visibleDuration > AUTO_FOLLOW_MAX_VISIBLE_SEC) return;
     const pht = this.playheadTime;
-    const end = this.scrollTime + this.visibleDuration;
+    const vis = this.visibleDuration;
 
-    // Si on approche du bord droit (> 85%), avancer le scroll
-    if (pht > this.scrollTime + this.visibleDuration * 0.85) {
-      this.scrollTime = pht - this.visibleDuration * 0.15;
+    // Si le playhead est complètement hors de vue, ne pas téléporter : l'utilisateur
+    // a volontairement scrollé ailleurs, on respecte sa position.
+    if (pht < this.scrollTime || pht > this.scrollTime + vis) return;
+
+    // Playhead visible : l'accompagner si il approche du bord droit (> 85%)
+    if (pht > this.scrollTime + vis * 0.85) {
+      this.scrollTime = pht - vis * 0.15;
       this._clampScroll();
-      this._dirty = true;
-    }
-    // Si playhead est hors de vue à gauche
-    if (pht < this.scrollTime) {
-      this.scrollTime = Math.max(0, pht - this.visibleDuration * 0.1);
       this._dirty = true;
     }
   }
@@ -473,6 +484,12 @@ class WaveformRenderer {
   /* ── Rendu ──────────────────────────────────────── */
 
   _dpr() { return window.devicePixelRatio || 1; }
+
+  // Helpers dimensions CSS : retournent clientWidth/Height ou canvas.width en fallback
+  // (les canvases offscreen hors-DOM ont clientWidth=0 mais width=dimension physique)
+  _cW()  { return this.waveCanvas.clientWidth   || this.waveCanvas.width; }
+  _cH()  { return this.waveCanvas.clientHeight  || this.waveCanvas.height; }
+  _crH() { return this.rulerCanvas.clientHeight || this.rulerCanvas.height; }
 
   /** Resize le canvas si le conteneur a changé de taille */
   _syncSize() {
@@ -531,8 +548,8 @@ class WaveformRenderer {
 
   _drawWaveform() {
     const ctx = this.wctx;
-    const W   = this.waveCanvas.clientWidth;
-    const H   = this.waveCanvas.clientHeight;
+    const W   = this._cW();
+    const H   = this._cH();
 
     ctx.clearRect(0, 0, W, H);
 
@@ -546,8 +563,10 @@ class WaveformRenderer {
     const isSpectral = this.viewMode === 'spectral' && !!this._specBass;
 
     // Détection mode sinusoïdal + callback de transition
+    // Passe en sinusoïde si la durée visible ≤ seuil configurable (en secondes)
+    const SINE_MODE_MAX_VISIBLE_SEC = 2; // ← modifier ici pour changer le seuil
     const _spx       = W / this.visibleDuration;
-    const isSineNow  = !isSpectral && !!this._rawSamples && (this._sampleRate / _spx) < 150;
+    const isSineNow  = !isSpectral && !!this._rawSamples && this.visibleDuration <= SINE_MODE_MAX_VISIBLE_SEC;
     if (isSineNow !== this._isSineMode) {
       this._isSineMode = isSineNow;
       if (this.onSineModeChange) this.onSineModeChange(isSineNow);
@@ -570,20 +589,65 @@ class WaveformRenderer {
     // ── Waveform ──
     this._drawWaveShape(ctx, W, H);
 
-    // Ligne centrale horizontale
-    ctx.save();
+    // Ligne centrale horizontale (colorée selon les sections pinceau)
     if (this.audioBuffer) {
-      const xStart = this.timeToX(0);
-      const xEnd   = this.timeToX(this.audioBuffer.duration);
-      ctx.strokeStyle = this.waveColorStroke;
+      const pps    = this.pixelsPerSecond;
+      const startT = this.scrollTime;
+      const midY   = H / 2;
+      const xStart = Math.max(0, Math.floor(this.timeToX(0)));
+      const xEnd   = Math.min(W, Math.ceil(this.timeToX(this.audioBuffer.duration)));
+
+      ctx.save();
       ctx.lineWidth   = 1;
       ctx.globalAlpha = 0.7;
-      ctx.beginPath();
-      ctx.moveTo(xStart, H / 2);
-      ctx.lineTo(xEnd,   H / 2);
-      ctx.stroke();
+
+      if (this.measureColors.size === 0) {
+        // Pas de sections : trait uniforme
+        ctx.strokeStyle = this.waveColorStroke;
+        ctx.beginPath();
+        ctx.moveTo(xStart, midY);
+        ctx.lineTo(xEnd,   midY);
+        ctx.stroke();
+      } else {
+        // Construire les segments contigus de même couleur
+        const secPerMeasure = this.metronome && this.metronome.bpm > 0
+          ? (60 / this.metronome.bpm) * this.metronome.beatsPerMeasure
+          : 0;
+
+        let segStart = xStart;
+        let segColor = null;
+
+        const _colorAt = (px) => {
+          if (!secPerMeasure) return this.waveColorStroke;
+          const t = startT + px / pps;
+          const m = Math.floor((t - this.metronome.offset) / secPerMeasure);
+          const c = this.measureColors.get(m);
+          return c || this.waveColorStroke;
+        };
+
+        const _flush = (px, color) => {
+          if (px <= segStart) return;
+          ctx.strokeStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(segStart, midY);
+          ctx.lineTo(px,       midY);
+          ctx.stroke();
+        };
+
+        segColor = _colorAt(xStart);
+        for (let px = xStart + 1; px <= xEnd; px++) {
+          const c = _colorAt(px);
+          if (c !== segColor) {
+            _flush(px, segColor);
+            segStart = px;
+            segColor = c;
+          }
+        }
+        _flush(xEnd, segColor);
+      }
+
+      ctx.restore();
     }
-    ctx.restore();
 
     // ── Passe PAR-DESSUS ──
     // En spectral : bandes + barres boucle/mesure visibles par-dessus le spectre
@@ -604,10 +668,27 @@ class WaveformRenderer {
     this._drawPinLinesOnWave(ctx, W, H);
 
     // ── Barre pointée (clic waveform ou drag de pin) ──
-    this._drawClickMarkerOnWave(ctx, W, H);
+    if (!this.exportMode) this._drawClickMarkerOnWave(ctx, W, H);
 
     // ── Playhead ──
-    this._drawPlayhead(ctx, W, H);
+    if (!this.exportMode) this._drawPlayhead(ctx, W, H);
+
+    // ── Barre curseur mode seek (espace maintenu) ──
+    if (!this.exportMode && this.spaceSeekMode && this._spaceSeekCursorX !== null) {
+      const x = this._spaceSeekCursorX;
+      if (x >= 0 && x <= W) {
+        ctx.save();
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+        ctx.lineWidth   = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, H);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+    }
 
   }
 
@@ -693,8 +774,8 @@ class WaveformRenderer {
     const startSec = this.scrollTime;
 
     // ── Mode sinusoïdal ──
-    const samplesPerPixel = this._sampleRate / pps;
-    if (this._rawSamples && samplesPerPixel < 150) {
+    const SINE_MODE_MAX_VISIBLE_SEC = 2; // même seuil que dans _drawWaveform
+    if (this._rawSamples && this.visibleDuration <= SINE_MODE_MAX_VISIBLE_SEC) {
       if (clipX0 !== null) {
         ctx.save();
         ctx.beginPath();
@@ -718,25 +799,36 @@ class WaveformRenderer {
     ctx.strokeStyle = strokeColor;
     ctx.lineWidth   = 1;
 
-    // Bord supérieur pxStart → pxEnd
+    // Précalcul des Y pour éviter de double-boucler
+    const yTop = new Float32Array(pxEnd - pxStart);
+    const yBot = new Float32Array(pxEnd - pxStart);
+    for (let px = pxStart; px < pxEnd; px++) {
+      const t  = startSec + px / pps;
+      const pi = (t < 0 || t > this.duration) ? -1
+        : Math.min(this._peakCount - 1, Math.max(0, Math.floor(t / peakStep)));
+      yTop[px - pxStart] = pi < 0 ? midY : midY - Math.min(this._peaksMax[pi] * hH,  midY);
+      yBot[px - pxStart] = pi < 0 ? midY : midY - Math.max(this._peaksMin[pi] * hH, -midY);
+    }
+
+    // ── Fill (chemin fermé) ──
     ctx.beginPath();
     ctx.moveTo(pxStart, midY);
-    for (let px = pxStart; px < pxEnd; px++) {
-      const t = startSec + px / pps;
-      if (t < 0 || t > this.duration) { ctx.lineTo(px, midY); continue; }
-      const pi = Math.min(this._peakCount - 1, Math.max(0, Math.floor(t / peakStep)));
-      ctx.lineTo(px, midY - Math.min(this._peaksMax[pi] * hH, midY));
-    }
-    // Bord inférieur pxEnd → pxStart
-    for (let px = pxEnd - 1; px >= pxStart; px--) {
-      const t = startSec + px / pps;
-      if (t < 0 || t > this.duration) { ctx.lineTo(px, midY); continue; }
-      const pi = Math.min(this._peakCount - 1, Math.max(0, Math.floor(t / peakStep)));
-      ctx.lineTo(px, midY - Math.max(this._peaksMin[pi] * hH, -midY));
-    }
+    for (let px = pxStart; px < pxEnd; px++) ctx.lineTo(px, yTop[px - pxStart]);
+    for (let px = pxEnd - 1; px >= pxStart; px--) ctx.lineTo(px, yBot[px - pxStart]);
     ctx.closePath();
     ctx.fill();
+
+    // ── Stroke : deux chemins ouverts (haut + bas) — pas de bords verticaux ──
+    ctx.beginPath();
+    ctx.moveTo(pxStart, yTop[0]);
+    for (let px = pxStart + 1; px < pxEnd; px++) ctx.lineTo(px, yTop[px - pxStart]);
     ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(pxStart, yBot[0]);
+    for (let px = pxStart + 1; px < pxEnd; px++) ctx.lineTo(px, yBot[px - pxStart]);
+    ctx.stroke();
+
     ctx.globalAlpha = 1;
   }
 
@@ -903,6 +995,9 @@ class WaveformRenderer {
 
   _drawBeatMarkers(ctx, W, H, underPass) {
     if (!this.audioBuffer) return;
+    // En mode export : masquer mesure et tempo, garder uniquement les barres de boucle
+    if (this.exportMode && !underPass) return;
+    if (this.exportMode && underPass && !this.showLoopMarkers) return;
     if (!this.showLoopMarkers && !this.showMeasureMarkers && !this.showBeatMarkers) return;
 
     const startT = this.scrollTime;
@@ -924,9 +1019,9 @@ class WaveformRenderer {
         let color, lineH, lineW, alpha, drawn = false;
 
         if (b.isLoopStart && this.showLoopMarkers) {
-          color = this.markerColorLoop; lineH = H * this.loopBarHeight; lineW = 2; alpha = this.loopOpacity; drawn = true;
-        } else if (isMeasureStart && this.showMeasureMarkers) {
-          color = this.markerColorMeasure; lineH = H * this.measureBarHeight; lineW = 1.5; alpha = this.measureOpacity; drawn = true;
+          color = this.markerColorLoop; lineH = H * this.loopBarHeight; lineW = 2 * this.exportScale; alpha = this.exportMode ? 0.20 : this.loopOpacity; drawn = true;
+        } else if (isMeasureStart && this.showMeasureMarkers && !this.exportMode) {
+          color = this.markerColorMeasure; lineH = H * this.measureBarHeight; lineW = 1.5 * this.exportScale; alpha = this.measureOpacity; drawn = true;
         }
 
         if (!drawn) continue;
@@ -948,11 +1043,13 @@ class WaveformRenderer {
           const loopNum = loopDuration > 0
             ? Math.floor((b.time - this.metronome.offset) / loopDuration) + 1
             : 1;
-          ctx.font = '9px monospace';
-          ctx.fillText(`B${loopNum}`, x + 3, 11);
+          const loopPrefix = (typeof i18n !== 'undefined') ? i18n.t('canvas_loop_prefix') : 'L';
+          ctx.font = `${Math.round(9 * this.exportScale)}px monospace`;
+          ctx.fillText(`${loopPrefix}${loopNum}`, x + 3 * this.exportScale, 11 * this.exportScale);
         } else {
-          ctx.font = '10px monospace';
-          ctx.fillText(`M${b.measureIdx + 1}`, x + 3, 11);
+          const measurePrefix = (typeof i18n !== 'undefined') ? i18n.t('canvas_measure_prefix') : 'M';
+          ctx.font = `${Math.round(10 * this.exportScale)}px monospace`;
+          ctx.fillText(`${measurePrefix}${b.measureIdx + 1}`, x + 3 * this.exportScale, 11 * this.exportScale);
         }
 
       } else {
@@ -975,9 +1072,10 @@ class WaveformRenderer {
   }
 
   _drawBoundaryMarkers(ctx, W, H) {
+    const es = this.exportScale;
     const boundaries = [
-      { time: 0,             color: '#ffffff', label: 'DEBUT' },
-      { time: this.duration, color: '#ffffff', label: 'FIN' },
+      { time: 0,             color: '#ffffff', label: (typeof i18n !== 'undefined' ? i18n.t('canvas_start') : 'START') },
+      { time: this.duration, color: '#ffffff', label: (typeof i18n !== 'undefined' ? i18n.t('canvas_end')   : 'END')   },
     ];
 
     for (const { time, color, label } of boundaries) {
@@ -988,8 +1086,8 @@ class WaveformRenderer {
       ctx.save();
       ctx.globalAlpha = 0.85;
       ctx.strokeStyle = color;
-      ctx.lineWidth   = 2;
-      ctx.setLineDash([5, 3]);
+      ctx.lineWidth   = 2 * es;
+      ctx.setLineDash([5 * es, 3 * es]);
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, H);
@@ -999,9 +1097,9 @@ class WaveformRenderer {
       // Étiquette
       ctx.globalAlpha = 0.9;
       ctx.fillStyle   = color;
-      ctx.font        = 'bold 11px monospace';
+      ctx.font        = `bold ${Math.round(11 * es)}px monospace`;
       ctx.textAlign   = time === 0 ? 'left' : 'right';
-      ctx.fillText(label, time === 0 ? x + 4 : x - 4, H - 6);
+      ctx.fillText(label, time === 0 ? x + 4 * es : x - 4 * es, H - 6 * es);
       ctx.restore();
     }
   }
@@ -1013,8 +1111,9 @@ class WaveformRenderer {
     const visibleMeasures = this._getVisibleMeasureRanges(W);
     if (visibleMeasures.length === 0) return;
 
+    const es = this.exportScale;
     ctx.save();
-    ctx.font      = 'bold 9px monospace';
+    ctx.font      = `bold ${Math.round(9 * es)}px monospace`;
     ctx.textAlign = 'left';
 
     for (const { measureIdx, xStart } of visibleMeasures) {
@@ -1029,16 +1128,16 @@ class WaveformRenderer {
       if (!entry || !entry.name) continue;
 
       const label   = entry.name.toUpperCase();
-      const x       = xStart + 3;
-      const y       = 9; // haut de la règle (24px hauteur)
+      const x       = xStart + 3 * es;
+      const y       = 9 * es; // haut de la règle
 
       const metrics = ctx.measureText(label);
-      const tw      = metrics.width + 6;
+      const tw      = metrics.width + 6 * es;
 
       // Petit rectangle coloré fond
       ctx.globalAlpha = 0.85;
       ctx.fillStyle   = color;
-      ctx.fillRect(x - 2, y - 8, tw, 11);
+      ctx.fillRect(x - 2 * es, y - 8 * es, tw, 11 * es);
 
       // Texte blanc
       ctx.globalAlpha = 1;
@@ -1076,8 +1175,8 @@ class WaveformRenderer {
 
   _drawRuler() {
     const ctx = this.rctx;
-    const W   = this.rulerCanvas.clientWidth;
-    const H   = this.rulerCanvas.clientHeight;
+    const W   = this._cW();
+    const H   = this._crH();
 
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = '#111';
@@ -1085,9 +1184,10 @@ class WaveformRenderer {
 
     if (!this.audioBuffer) return;
 
+    const es = this.exportScale;
     ctx.fillStyle   = '#555';
     ctx.strokeStyle = '#444';
-    ctx.font        = '9px monospace';
+    ctx.font        = `${Math.round(9 * es)}px monospace`;
     ctx.textAlign   = 'left';
 
     const visD = this.visibleDuration;
@@ -1098,7 +1198,7 @@ class WaveformRenderer {
       0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
       1, 2, 5, 10, 15, 30, 60, 120, 300
     ];
-    const minPxBetweenTicks = 50;
+    const minPxBetweenTicks = 50 * es;
     let interval = niceIntervals[niceIntervals.length - 1];
     for (const iv of niceIntervals) {
       if (iv * pps >= minPxBetweenTicks) { interval = iv; break; }
@@ -1111,26 +1211,26 @@ class WaveformRenderer {
     for (let t = first; t <= endT; t += interval) {
       const x = (t - startT) * pps;
       ctx.strokeStyle = '#333';
-      ctx.lineWidth   = 1;
+      ctx.lineWidth   = 1 * es;
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, H);
       ctx.stroke();
 
       ctx.fillStyle = '#555';
-      ctx.fillText(this._formatTime(t, interval), x + 3, H - 4);
+      ctx.fillText(this._formatTime(t, interval), x + 3 * es, H - 4 * es);
     }
 
     // Sub-ticks
     const subInterval = interval / 4;
-    if (subInterval * pps > 8) {
+    if (subInterval * pps > 8 * es) {
       const subFirst = Math.ceil(startT / subInterval) * subInterval;
       for (let t = subFirst; t <= endT; t += subInterval) {
         // Sauter les ticks principaux
         if (Math.abs(t % interval) < 1e-9) continue;
         const x = (t - startT) * pps;
         ctx.strokeStyle = '#222';
-        ctx.lineWidth   = 1;
+        ctx.lineWidth   = 1 * es;
         ctx.beginPath();
         ctx.moveTo(x, H / 2);
         ctx.lineTo(x, H);
@@ -1139,14 +1239,16 @@ class WaveformRenderer {
     }
 
     // Playhead sur la règle
-    const phX = (this.playheadTime - startT) * pps;
-    if (phX >= 0 && phX <= W) {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(phX - 0.5, 0, 1, H);
+    if (!this.exportMode) {
+      const phX = (this.playheadTime - startT) * pps;
+      if (phX >= 0 && phX <= W) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(phX - 0.5, 0, 1, H);
+      }
     }
 
     // Barre pointillée du marqueur de clic
-    if (!this._pinDrag.active && this.clickMarkerTime !== null) {
+    if (!this.exportMode && !this._pinDrag.active && this.clickMarkerTime !== null) {
       const cx = (this.clickMarkerTime - startT) * pps;
       if (cx >= -12 && cx <= W + 12) {
         // Trait pointillé blanc
@@ -1206,9 +1308,10 @@ class WaveformRenderer {
   _drawPins(ctx, W, H) {
     const startT = this.scrollTime;
     const pps    = this.pixelsPerSecond;
-    const r      = 7;          // rayon de la partie circulaire
-    const cY     = H - r - 1; // centre du cercle (bas)
-    const tipY   = 1;          // pointe haute
+    const es     = this.exportScale;
+    const r      = 7 * es;      // rayon de la partie circulaire
+    const cY     = H - r - 1 * es; // centre du cercle (bas)
+    const tipY   = 1 * es;         // pointe haute
 
     for (const pin of this.pins) {
       const x      = (pin.time - startT) * pps;
@@ -1221,10 +1324,10 @@ class WaveformRenderer {
       if (locked) {
         const pulse     = 0.5 + 0.5 * Math.sin(performance.now() * 0.002618);
         ctx.shadowColor = color;
-        ctx.shadowBlur  = 18 + 10 * pulse;
+        ctx.shadowBlur  = (18 + 10 * pulse) * es;
       } else {
         ctx.shadowColor = color;
-        ctx.shadowBlur  = 14;
+        ctx.shadowBlur  = 14 * es;
       }
 
       // ─ Forme goutte d'eau (remplie)
@@ -1243,12 +1346,12 @@ class WaveformRenderer {
       ctx.fill();
 
       // ─ Contour épais pour le pin verrouillé (blanc semi-transparent = toujours plus clair que le remplissage)
-      if (locked) {
+      if (locked && !this.exportMode) {
         const pulse   = 0.5 + 0.5 * Math.sin(performance.now() * 0.002618);
         ctx.shadowColor = color;
-        ctx.shadowBlur  = 10 + 8 * pulse;
+        ctx.shadowBlur  = (10 + 8 * pulse) * es;
         ctx.strokeStyle = `rgba(255,255,255,${0.55 + 0.20 * pulse})`;
-        ctx.lineWidth   = 2.5;
+        ctx.lineWidth   = 2.5 * es;
         ctx.globalAlpha = 1;
         ctx.stroke();
 
@@ -1433,6 +1536,10 @@ class WaveformRenderer {
       this._dirty = true;
       this.waveCanvas.style.cursor = 'grabbing';
       return;
+    }
+    if (this.spaceSeekMode) {
+      this._spaceSeekCursorX = this._getClientX(this.waveCanvas, e);
+      this._dirty = true;
     }
     if (this.paintBrushMode) {
       // Curseur ligne verticale : mise à jour directe DOM (zéro latence)
@@ -1635,12 +1742,33 @@ class WaveformRenderer {
     const sign = sec < 0 ? '-' : '';
     const abs  = Math.abs(sec);
     const m    = Math.floor(abs / 60);
-    const s    = Math.floor(abs % 60);
-    if (abs >= 60)
-      return `${sign}${m}:${String(s).padStart(2,'0')}`;
-    if (interval >= 1)
-      return `${sign}${s}.${String(Math.floor((abs % 1) * 10))[0]}`;
-    return `${sign}${(abs * 1000).toFixed(0)}ms`;
+    const s    = abs % 60;         // secondes avec décimales
+    const sInt = Math.floor(s);
+    const mm   = String(m).padStart(1, '0');
+    const ss   = String(sInt).padStart(2, '0');
+
+    // Précision déterminée par l'intervalle entre ticks
+    if (interval >= 1) {
+      // Précision à la seconde
+      if (abs >= 60) return `${sign}${mm}m${ss}s`;
+      return `${sign}${sInt}s`;
+    }
+    if (interval >= 0.1) {
+      // 1 décimale
+      const d1 = Math.floor((s % 1) * 10);
+      if (abs >= 60) return `${sign}${mm}m${ss}.${d1}s`;
+      return `${sign}${sInt}.${d1}s`;
+    }
+    if (interval >= 0.01) {
+      // 2 décimales
+      const d2 = String(Math.floor((s % 1) * 100)).padStart(2, '0');
+      if (abs >= 60) return `${sign}${mm}m${ss}.${d2}s`;
+      return `${sign}${sInt}.${d2}s`;
+    }
+    // < 10ms : millisecondes
+    const ms = Math.round((s % 1) * 1000);
+    if (abs >= 60) return `${sign}${mm}m${ss}.${String(ms).padStart(3, '0')}s`;
+    return `${sign}${sInt}.${String(ms).padStart(3, '0')}s`;
   }
 
   markDirty() { this._dirty = true; }

@@ -158,11 +158,143 @@ const ExportManager = (() => {
     return `${_base()}_${_bpm()}bpm_${suffix}.${_ext()}`;
   }
 
+  function _buildXmlName() {
+    return `${_base()}_${_bpm()}bpm-premiere.xml`;
+  }
+
+  function _generateXmlBlob() {
+    const fps        = parseFloat($('exp-xml-fps')?.value) || 60;
+    const isNtsc     = [23.976, 29.97, 59.94].includes(fps);
+    const timebase   = isNtsc ? Math.round(fps) : fps;
+    const mp         = _p.metroParams;
+    const audioBuf   = _p.audioBuffer;
+    const fileName   = _p.fileName || 'audio';
+    const duration   = audioBuf.duration;
+    const sampleRate = audioBuf.sampleRate;
+    const totalFrames = Math.round(duration * fps);
+    const seqName    = _base();
+
+    function ppColor(hex) {
+      const r = parseInt(hex.slice(1,3), 16);
+      const g = parseInt(hex.slice(3,5), 16);
+      const b = parseInt(hex.slice(5,7), 16);
+      return ((0xFF << 24) | (b << 16) | (g << 8) | r) >>> 0;
+    }
+    const COLOR_LOOP    = ppColor('#ff3355');
+    const COLOR_MEASURE = ppColor('#ff8800');
+    const COLOR_BEAT    = ppColor('#33dd88');
+
+    const markers = [];
+    if (mp.beatInterval > 0) {
+      const totalBeatsInLoop = mp.beatsPerMeasure * mp.measuresPerLoop;
+      let i = 0;
+      while (true) {
+        const t = mp.offset + i * mp.beatInterval;
+        if (t > duration + 0.001) break;
+        const frame        = Math.round(t * fps);
+        const beatInLoop   = i % totalBeatsInLoop;
+        const beatInMeasure = i % mp.beatsPerMeasure;
+        const measureIdx   = Math.floor(i / mp.beatsPerMeasure);
+        const loopIdx      = Math.floor(i / totalBeatsInLoop);
+        if (beatInLoop === 0)
+          markers.push({ frame, name: `Boucle ${loopIdx + 1}`, color: COLOR_LOOP });
+        else if (beatInMeasure === 0)
+          markers.push({ frame, name: `Mesure ${measureIdx + 1}`, color: COLOR_MEASURE });
+        else
+          markers.push({ frame, name: `${beatInMeasure + 1}`, color: COLOR_BEAT });
+        i++;
+      }
+    }
+
+    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const markerXml = markers.map(m =>
+      `    <marker>\n      <comment>${esc(m.name)}</comment>\n      <name>${esc(m.name)}</name>\n      <in>${m.frame}</in>\n      <out>-1</out>\n      <pproColor>${m.color}</pproColor>\n    </marker>`
+    ).join('\n');
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE xmeml>
+<xmeml version="4">
+  <sequence>
+    <name>${esc(seqName)}</name>
+    <duration>${totalFrames}</duration>
+    <rate>
+      <timebase>${timebase}</timebase>
+      <ntsc>${isNtsc ? 'TRUE' : 'FALSE'}</ntsc>
+    </rate>
+    <timecode>
+      <rate><timebase>${timebase}</timebase><ntsc>${isNtsc ? 'TRUE' : 'FALSE'}</ntsc></rate>
+      <string>00:00:00:00</string>
+      <frame>0</frame>
+      <displayformat>NDF</displayformat>
+    </timecode>
+    <media>
+      <video>
+        <format>
+          <samplecharacteristics>
+            <rate><timebase>${timebase}</timebase><ntsc>${isNtsc ? 'TRUE' : 'FALSE'}</ntsc></rate>
+            <width>1920</width><height>1080</height>
+            <anamorphic>FALSE</anamorphic>
+            <pixelaspectratio>square</pixelaspectratio>
+            <fielddominance>none</fielddominance>
+          </samplecharacteristics>
+        </format>
+        <track></track>
+      </video>
+      <audio>
+        <numOutputChannels>2</numOutputChannels>
+        <format>
+          <samplecharacteristics>
+            <depth>16</depth>
+            <samplerate>${sampleRate}</samplerate>
+          </samplecharacteristics>
+        </format>
+        <track>
+          <clipitem id="clipitem-1" premiereChannelType="stereo">
+            <name>${esc(fileName)}</name>
+            <duration>${totalFrames}</duration>
+            <rate><timebase>${timebase}</timebase><ntsc>${isNtsc ? 'TRUE' : 'FALSE'}</ntsc></rate>
+            <start>0</start>
+            <end>${totalFrames}</end>
+            <in>0</in>
+            <out>${totalFrames}</out>
+            <file id="file-1">
+              <name>${esc(fileName)}</name>
+              <pathurl>${esc(fileName)}</pathurl>
+              <rate><timebase>${timebase}</timebase><ntsc>${isNtsc ? 'TRUE' : 'FALSE'}</ntsc></rate>
+              <duration>${totalFrames}</duration>
+              <media>
+                <audio>
+                  <samplecharacteristics>
+                    <depth>16</depth>
+                    <samplerate>${sampleRate}</samplerate>
+                  </samplecharacteristics>
+                  <channelcount>2</channelcount>
+                </audio>
+              </media>
+            </file>
+            <sourcetrack><mediatype>audio</mediatype><trackindex>1</trackindex></sourcetrack>
+          </clipitem>
+        </track>
+      </audio>
+    </media>
+${markerXml}
+  </sequence>
+</xmeml>`;
+
+    return new Blob([xml], { type: 'application/xml' });
+  }
+
   function _updatePreview() {
     const items = [];
     if ($('exp-chk-audio')?.checked) items.push(_buildName('audio'));
     if ($('exp-chk-metro')?.checked) items.push(_buildName('metro'));
     if ($('exp-chk-mix')?.checked)   items.push(_buildName('mix'));
+    const hasXml = !!$('exp-chk-xml')?.checked;
+    if (hasXml) items.push(_buildXmlName());
+
+    // Afficher/masquer le row FPS selon l’état de la checkbox
+    const fpsRow = $('exp-xml-fps-row');
+    if (fpsRow) fpsRow.style.display = hasXml ? '' : 'none';
 
     // Sync état tag ON/OFF
     const tagsState = $('exp-tags-state');
@@ -171,13 +303,18 @@ const ExportManager = (() => {
     const list = $('exp-preview-list');
     if (list) {
       if (!items.length) {
-        list.innerHTML = '<li class="exp-preview-empty">Sélectionnez au moins un contenu</li>';
+        list.innerHTML = `<li class="exp-preview-empty">${i18n.t('exp_empty')}</li>`;
       } else if (items.length === 1) {
         list.innerHTML = `<li class="exp-preview-item"><code>${items[0]}</code></li>`;
       } else {
         const zipName = `${_base()}_${_bpm()}bpm.zip`;
+        const subItems = items.map((n, i) => {
+            const isLast = i === items.length - 1;
+            const sym    = isLast ? '└' : '├';
+            return `<li class="exp-preview-item exp-preview-item--sub"><span>${sym}──</span><code>${n}</code></li>`;
+          }).join('');
         list.innerHTML = `<li class="exp-preview-item exp-preview-item--zip"><code>${zipName}</code></li>`
-          + items.map(n => `<li class="exp-preview-item exp-preview-item--sub"><span>└</span><code>${n}</code></li>`).join('');
+          + `<div class="exp-preview-subtree">${subItems}</div>`;
       }
     }
 
@@ -185,8 +322,10 @@ const ExportManager = (() => {
     const label = $('exp-btn-label');
     if (btn)   btn.disabled = items.length === 0;
     if (label) label.textContent = items.length > 1
-      ? 'Télécharger le ZIP'
-      : 'Télécharger';
+      ? i18n.t('exp_btn_zip')
+      : items.length === 1 && $('exp-chk-xml')?.checked && !$('exp-chk-audio')?.checked && !$('exp-chk-metro')?.checked && !$('exp-chk-mix')?.checked
+        ? i18n.t('exp_btn_xml')
+        : i18n.t('exp_btn_download');
 
     // Griser tags si WAV
     const tagsToggle = $('exp-chk-tags')?.closest('.exp-tags-toggle');
@@ -215,12 +354,13 @@ const ExportManager = (() => {
     if ($('exp-chk-audio')?.checked) tasks.push({ type: 'audio', name: _buildName('audio') });
     if ($('exp-chk-metro')?.checked) tasks.push({ type: 'metro', name: _buildName('metro') });
     if ($('exp-chk-mix')?.checked)   tasks.push({ type: 'mix',   name: _buildName('mix')   });
-    if (!tasks.length) return;
+    const includeXml = !!$('exp-chk-xml')?.checked;
+    if (!tasks.length && !includeXml) return;
 
     $('exp-btn-download').disabled = true;
     _setProgress(true, 0.05, tasks.length > 1
-      ? `Rendu de ${tasks.length} pistes en parallèle…`
-      : `Rendu en cours…`);
+      ? i18n.tf('exp_prog_render_n', tasks.length)
+      : i18n.t('exp_prog_render'));
 
     try {
       // Rendu en parallèle (beaucoup plus rapide avec plusieurs pistes)
@@ -231,35 +371,42 @@ const ExportManager = (() => {
       };
       const buffers = await Promise.all(tasks.map(renderFn));
 
-      _setProgress(true, 0.80, 'Encodage…');
+      _setProgress(true, 0.80, i18n.t('exp_prog_encoding'));
       const blobs = [];
       for (let i = 0; i < buffers.length; i++) {
         const pct = 0.80 + (i / buffers.length) * 0.15;
-        _setProgress(true, pct, `Encodage ${i + 1}/${buffers.length} (${tasks[i].type})…`);
+        _setProgress(true, pct, i18n.tf('exp_prog_encoding_n', i + 1, buffers.length, tasks[i].type));
         blobs.push(await _makeBlobFromRendered(buffers[i]));
       }
 
-      if (tasks.length === 1) {
+      if (tasks.length === 0 && includeXml) {
+        // XML seul
+        _setProgress(true, 0.5, i18n.t('exp_prog_xml'));
+        const xmlBlob = _generateXmlBlob();
+        _setProgress(true, 0.95, i18n.t('exp_prog_downloading'));
+        download(xmlBlob, _buildXmlName());
+      } else if (tasks.length === 1 && !includeXml) {
         // Un seul fichier → téléchargement direct
-        _setProgress(true, 0.95, `Téléchargement de « ${tasks[0].name} »…`);
+        _setProgress(true, 0.95, i18n.tf('exp_prog_dl_file', tasks[0].name));
         download(blobs[0], tasks[0].name);
       } else if (typeof JSZip !== 'undefined') {
-        // Plusieurs fichiers → archive ZIP
-        _setProgress(true, 0.88, 'Création de l\'archive ZIP…');
+        // Plusieurs fichiers (audio et/ou XML) → archive ZIP
+        _setProgress(true, 0.88, i18n.t('exp_prog_zipping'));
         const zip = new JSZip();
         tasks.forEach((t, i) => zip.file(t.name, blobs[i]));
+        if (includeXml) zip.file(_buildXmlName(), _generateXmlBlob());
         const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
         download(zipBlob, `${_base()}_${_bpm()}bpm.zip`);
       } else {
         // Fallback si JSZip absent : téléchargements séquentiels
         for (let i = 0; i < tasks.length; i++) {
-          _setProgress(true, 0.88 + i * 0.04, `Téléchargement de « ${tasks[i].name} »…`);
+          _setProgress(true, 0.88 + i * 0.04, i18n.tf('exp_prog_dl_file', tasks[i].name));
           download(blobs[i], tasks[i].name);
           if (i < tasks.length - 1) await new Promise(r => setTimeout(r, 400));
         }
       }
 
-      _setProgress(true, 1.0, tasks.length > 1 ? `Archive ZIP téléchargée ✓` : 'Téléchargé ✓');
+      _setProgress(true, 1.0, tasks.length > 1 ? i18n.t('exp_prog_done_zip') : i18n.t('exp_prog_done'));
       setTimeout(() => {
         _setProgress(false);
         $('exp-btn-download').disabled = false;
@@ -267,7 +414,7 @@ const ExportManager = (() => {
       }, 2000);
 
     } catch (err) {
-      _setProgress(true, 0, '⚠ Erreur : ' + err.message);
+      _setProgress(true, 0, i18n.tf('exp_prog_error', err.message));
 
       $('exp-btn-download').disabled = false;
     }
@@ -276,7 +423,7 @@ const ExportManager = (() => {
   /* ══ API publique ════════════════════════════════════════════════ */
 
   function open(audioBuffer, audioVolume, metroParams, fileName) {
-    _p = { audioBuffer, audioVolume, metroParams };
+    _p = { audioBuffer, audioVolume, metroParams, fileName };
 
     // Nom de base par défaut = nom du fichier sans extension
     const input = $('exp-name-input');
@@ -305,9 +452,9 @@ const ExportManager = (() => {
     $('exp-btn-download')?.addEventListener('click', _run);
 
     // Mise à jour de la prévisualisation à chaque changement
-    ['exp-chk-audio','exp-chk-metro','exp-chk-mix',
+    ['exp-chk-audio','exp-chk-metro','exp-chk-mix','exp-chk-xml',
      'exp-fmt-wav','exp-fmt-mp3',
-     'exp-name-input','exp-chk-tags']
+     'exp-name-input','exp-chk-tags','exp-xml-fps']
       .forEach(id => {
         const el = $(id);
         if (!el) return;
