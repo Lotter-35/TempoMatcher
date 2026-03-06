@@ -82,11 +82,8 @@ No install. No account. Everything runs in the browser and your data stays local
 
 ### 🎨 Section painter
 
-<div align="center">
-
 ![Section painter](docs/screenshot-sections.png)
 
-</div>
 
 - Activate with **B** — paint individual measures by dragging
 - Right-click to erase; **Ctrl+Z / Ctrl+Y** for undo/redo
@@ -95,11 +92,9 @@ No install. No account. Everything runs in the browser and your data stays local
 
 ### 📐 Marker layers
 
-<div align="center">
 
 ![Markers panel](docs/screenshot-markers.png)
 
-</div>
 
 Five independent layers: **Loop · Measure · Beat · Bands · Waveform**
 
@@ -113,11 +108,7 @@ Each layer has its own:
 
 ### 📤 Export
 
-<div align="center">
-
-![Export modal](docs/screenshot-export.png)
-
-</div>
+<img src="docs/screenshot-export.png" width="480" />
 
 **Audio export (MP3 / WAV)**
 - Three render modes: audio only · metronome only · mixed (audio + click)
