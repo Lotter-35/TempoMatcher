@@ -20,6 +20,11 @@ Drop a track. Set the BPM. Align the grid. Export.
 
 ![Main interface](docs/screenshot-main.png)
 
+---
+
+
+### 🌐 [TempoMatcher — Open the app](https://Lotter-35.github.io/TempoMatcher)
+
 </div>
 
 ---
@@ -35,9 +40,6 @@ It was designed for **musicians, producers, DJs and video editors** who need to:
 - organize a track into color-coded sections (verse, chorus, break…)
 
 No install. No account. Everything runs in the browser and your data stays local.
-
-
-🌐 **[Access the app online → TempoMatcher](https://Lotter-35.github.io/TempoMatcher)**
 
 ---
 
@@ -65,11 +67,8 @@ No install. No account. Everything runs in the browser and your data stays local
 
 ### 🥁 Beat grid & metronome
 
-<div align="center">
 
-![Beat grid controls](docs/screenshot-grid.png)
-
-</div>
+<img src="docs/screenshot-grid.png" width="550" />
 
 | Control | Details |
 |---|---|
@@ -82,8 +81,7 @@ No install. No account. Everything runs in the browser and your data stays local
 
 ### 🎨 Section painter
 
-![Section painter](docs/screenshot-sections.png)
-
+<img src="docs/screenshot-sections.png" width="200" />
 
 - Activate with **B** — paint individual measures by dragging
 - Right-click to erase; **Ctrl+Z / Ctrl+Y** for undo/redo
@@ -92,8 +90,7 @@ No install. No account. Everything runs in the browser and your data stays local
 
 ### 📐 Marker layers
 
-
-![Markers panel](docs/screenshot-markers.png)
+<img src="docs/screenshot-markers.png" width="500" />
 
 
 Five independent layers: **Loop · Measure · Beat · Bands · Waveform**
@@ -108,7 +105,7 @@ Each layer has its own:
 
 ### 📤 Export
 
-<img src="docs/screenshot-export.png" width="480" />
+<img src="docs/screenshot-export.png" width="650" />
 
 **Audio export (MP3 / WAV)**
 - Three render modes: audio only · metronome only · mixed (audio + click)
