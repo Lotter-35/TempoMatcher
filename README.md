@@ -16,8 +16,11 @@ Drop a track. Set the BPM. Align the grid. Export.
 
 ---
 
-> **Screenshot — Main interface**
-> ![Main interface](docs/screenshot-main.png)
+<div align="center">
+
+![Main interface](docs/screenshot-main.png)
+
+</div>
 
 ---
 
@@ -48,9 +51,11 @@ No install. No account. Everything runs in the browser and your data stays local
 
 ### 🌊 Waveform canvas
 
-> **Screenshot — Waveform with beat grid**
+<div align="center">
 
-> ![Waveform](docs/screenshot-waveform.png)
+![Waveform](docs/screenshot-waveform.png)
+
+</div>
 
 - **Classic mode** — min/max peaks (multi-channel mixdown)
 - **Spectral mode** — colour spectrogram (bass / mid / high)
@@ -60,8 +65,11 @@ No install. No account. Everything runs in the browser and your data stays local
 
 ### 🥁 Beat grid & metronome
 
-> **Screenshot — BPM / Time signature panels**
-> ![Beat grid controls](docs/screenshot-grid.png)
+<div align="center">
+
+![Beat grid controls](docs/screenshot-grid.png)
+
+</div>
 
 | Control | Details |
 |---|---|
@@ -74,8 +82,11 @@ No install. No account. Everything runs in the browser and your data stays local
 
 ### 🎨 Section painter
 
-> **Screenshot — Brush tool with colored sections**
-> ![Section painter](docs/screenshot-sections.png)
+<div align="center">
+
+![Section painter](docs/screenshot-sections.png)
+
+</div>
 
 - Activate with **B** — paint individual measures by dragging
 - Right-click to erase; **Ctrl+Z / Ctrl+Y** for undo/redo
@@ -84,8 +95,11 @@ No install. No account. Everything runs in the browser and your data stays local
 
 ### 📐 Marker layers
 
-> **Screenshot — Markers panel**
-> ![Markers panel](docs/screenshot-markers.png)
+<div align="center">
+
+![Markers panel](docs/screenshot-markers.png)
+
+</div>
 
 Five independent layers: **Loop · Measure · Beat · Bands · Waveform**
 
@@ -99,8 +113,11 @@ Each layer has its own:
 
 ### 📤 Export
 
-> **Screenshot — Export modal**
-> ![Export modal](docs/screenshot-export.png)
+<div align="center">
+
+![Export modal](docs/screenshot-export.png)
+
+</div>
 
 **Audio export (MP3 / WAV)**
 - Three render modes: audio only · metronome only · mixed (audio + click)
